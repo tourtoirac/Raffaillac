@@ -1,0 +1,549 @@
+<!DOCTYPE html>
+<html lang="fr">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Online Boardgames</title>
+  <style>
+    body {
+      font-family: Arial, sans-serif;
+      margin: 20px;
+      background-color: #f4f4f9;
+    }
+
+    h1 {
+      color: #333;
+    }
+
+    #status {
+      padding: 10px;
+      border: 1px solid #ccc;
+      background-color: #f5f5f5;
+      margin-bottom: 20px;
+      border-radius: 4px;
+    }
+
+    #layout {
+      display: flex;
+      align-items: flex-start;
+      gap: 20px;
+    }
+
+    .tabs {
+      display: flex;
+      flex-direction: column;
+      gap: 6px;
+      min-width: 160px;
+      padding-bottom: 0;
+      border-bottom: none;
+    }
+
+    .tab-button {
+      padding: 10px 20px;
+      cursor: pointer;
+      border: 1px solid #ccc;
+      background-color: #e0e0e0;
+      border-radius: 5px;
+      text-align: left;
+      transition: background-color 0.3s;
+    }
+
+    .tab-button.active {
+      background-color: #fff;
+      font-weight: bold;
+      border: 1px solid #007bff;
+      color: #007bff;
+    }
+
+    .table-container {
+      flex: 1;
+      background-color: white;
+      padding: 20px;
+      border: 1px solid #ccc;
+      border-radius: 5px;
+      display: none;
+    }
+
+    .table-container.active {
+      display: block;
+    }
+
+    table {
+      width: 100%;
+      border-collapse: collapse;
+    }
+
+    th, td {
+      border: 1px solid #ddd;
+      padding: 12px;
+      text-align: left;
+    }
+
+    th {
+      background-color: #f8f9fa;
+    }
+
+    tr:nth-child(even) {
+      background-color: #f9f9f9;
+    }
+
+    .create-game-btn {
+      padding: 10px 15px;
+      cursor: pointer;
+      background-color: #28a745;
+      color: white;
+      border: none;
+      border-radius: 5px;
+      margin-top: 15px;
+      font-weight: bold;
+    }
+
+    .create-game-btn:hover {
+      background-color: #218838;
+    }
+
+    .create-dropdown {
+      position: relative;
+      display: inline-block;
+      margin-top: 15px;
+    }
+
+    .create-dropdown-btn {
+      padding: 10px 15px;
+      cursor: pointer;
+      background-color: #28a745;
+      color: white;
+      border: none;
+      border-radius: 5px;
+      font-weight: bold;
+    }
+
+    .create-dropdown-btn:hover {
+      background-color: #218838;
+    }
+
+    .create-dropdown-content {
+      display: none;
+      position: absolute;
+      background-color: white;
+      border: 1px solid #ccc;
+      border-radius: 5px;
+      box-shadow: 0 4px 8px rgba(0,0,0,0.15);
+      z-index: 1;
+      min-width: 160px;
+    }
+
+    .create-dropdown-content.show {
+      display: block;
+    }
+
+    .create-dropdown-content a {
+      display: block;
+      padding: 10px 15px;
+      text-decoration: none;
+      color: #333;
+      cursor: pointer;
+    }
+
+    .create-dropdown-content a:hover {
+      background-color: #f0f0f0;
+    }
+
+    .player-btn {
+      padding: 6px 12px;
+      margin: 2px;
+      border: 1px solid #007bff;
+      background-color: #e7f1ff;
+      color: #007bff;
+      border-radius: 4px;
+      cursor: default;
+      font-size: 0.9em;
+    }
+
+    .owner-badge {
+      font-size: 0.75em;
+      color: #888;
+      margin-left: 4px;
+    }
+
+    .modal-overlay {
+      display: none;
+      position: fixed;
+      top: 0;
+      left: 0;
+      width: 100%;
+      height: 100%;
+      background-color: rgba(0,0,0,0.5);
+      z-index: 100;
+      justify-content: center;
+      align-items: center;
+    }
+
+    .modal-overlay.show {
+      display: flex;
+    }
+
+    .modal-form {
+      background-color: white;
+      padding: 25px;
+      border-radius: 8px;
+      box-shadow: 0 4px 12px rgba(0,0,0,0.25);
+      min-width: 320px;
+    }
+
+    .modal-form h3 {
+      margin-top: 0;
+      margin-bottom: 15px;
+    }
+
+    .modal-form label {
+      display: block;
+      margin-bottom: 4px;
+      font-weight: bold;
+      font-size: 0.9em;
+    }
+
+    .modal-form input {
+      width: 100%;
+      padding: 8px 10px;
+      margin-bottom: 12px;
+      border: 1px solid #ccc;
+      border-radius: 4px;
+      box-sizing: border-box;
+      font-size: 1em;
+    }
+
+    .modal-form .form-buttons {
+      display: flex;
+      justify-content: flex-end;
+      gap: 10px;
+      margin-top: 10px;
+    }
+
+    .modal-form .form-buttons button {
+      padding: 8px 18px;
+      border: none;
+      border-radius: 5px;
+      cursor: pointer;
+      font-size: 0.95em;
+    }
+
+    .modal-form .btn-confirm {
+      background-color: #28a745;
+      color: white;
+      font-weight: bold;
+    }
+
+    .modal-form .btn-confirm:hover {
+      background-color: #218838;
+    }
+
+    .modal-form .btn-cancel {
+      background-color: #ccc;
+      color: #333;
+    }
+
+    .modal-form .btn-cancel:hover {
+      background-color: #aaa;
+    }
+
+    .modal-form .error-msg {
+      color: #dc3545;
+      font-size: 0.85em;
+      margin-top: -8px;
+      margin-bottom: 10px;
+      display: none;
+    }
+  </style>
+</head>
+<body>
+  <h1>Online Boardgames</h1>
+
+  <div id="status-container">
+    <div id="status">Chargement de la configuration...</div>
+  </div>
+
+  <div id="layout">
+    <div id="tabs-container" class="tabs"></div>
+    <div id="tables-container"></div>
+  </div>
+
+  <div id="create-modal" class="modal-overlay">
+    <div class="modal-form">
+      <h3>Créer une session</h3>
+      <label for="input-nickname">Nickname (obligatoire)</label>
+      <input type="text" id="input-nickname" placeholder="Votre pseudo" />
+      <div id="nickname-error" class="error-msg">Le nickname est obligatoire.</div>
+
+      <label for="input-key">Key (optionnel)</label>
+      <input type="text" id="input-key" placeholder="Clé de session" />
+
+      <div class="form-buttons">
+        <button class="btn-cancel" id="modal-cancel">Annuler</button>
+        <button class="btn-confirm" id="modal-confirm">Créer</button>
+      </div>
+    </div>
+  </div>
+
+  <script>
+    const statusElement = document.getElementById("status");
+    const tabsContainer = document.getElementById("tabs-container");
+    const tablesContainer = document.getElementById("tables-container");
+
+    let gameConfig = null;
+    let gameInfo = {};
+    let sessionsData = {};
+
+    fetch("conf.json")
+      .then(response => response.json())
+      .then(config => {
+        gameConfig = config;
+        connectWebSocket();
+      })
+      .catch(err => {
+        statusElement.textContent = "Erreur chargement conf.json: " + err;
+      });
+
+    function connectWebSocket() {
+      const wsUrl = `ws://${gameConfig.host}:${gameConfig.port}`;
+      statusElement.textContent = "Connexion au serveur " + wsUrl + "...";
+      const socket = new WebSocket(wsUrl);
+
+      socket.onopen = function () {
+        statusElement.textContent = "Connecté au serveur. Chargement des jeux...";
+        socket.send(JSON.stringify({
+          action: "list_game",
+          game_name_list: gameConfig.game_name_list
+        }));
+      };
+
+      socket.onmessage = function (event) {
+        try {
+          const data = JSON.parse(event.data);
+
+          if (data.event === "list_game") {
+            handleListGame(data);
+            socket.send(JSON.stringify({
+              action: "list_sessions",
+              game_name_list: gameConfig.game_name_list
+            }));
+          } else if (data.event === "sessions_info") {
+            handleSessionsInfo(data);
+          } else if (data.event === "session_created") {
+            handleSessionCreated(data);
+          }
+        } catch (e) {
+          console.error("Erreur parsing JSON:", e);
+        }
+      };
+
+      socket.onclose = function () {
+        statusElement.textContent = "Déconnecté. Reconnexion dans 3s...";
+        setTimeout(connectWebSocket, 3000);
+      };
+
+      socket.onerror = function () {
+        statusElement.textContent = "Erreur de connexion. Reconnexion dans 3s...";
+      };
+
+      window._socket = socket;
+    }
+
+    function handleListGame(data) {
+      gameInfo = {};
+      if (data.game_list) {
+        data.game_list.forEach(game => {
+          gameInfo[game.name] = game;
+        });
+      }
+    }
+
+    function handleSessionsInfo(data) {
+      sessionsData = data.content.active || {};
+      renderAll();
+    }
+
+    function handleSessionCreated(data) {
+      const session = data.session || {};
+      if (session.key) {
+        sessionStorage.setItem("obg_session", JSON.stringify(session));
+      }
+      window.location.href = "game.html";
+    }
+
+    let pendingGameName = null;
+
+    function openCreateModal(gameName) {
+      pendingGameName = gameName;
+      document.getElementById("input-nickname").value = "";
+      document.getElementById("input-key").value = "";
+      document.getElementById("nickname-error").style.display = "none";
+      document.getElementById("create-modal").classList.add("show");
+      document.getElementById("input-nickname").focus();
+    }
+
+    function closeCreateModal() {
+      document.getElementById("create-modal").classList.remove("show");
+      pendingGameName = null;
+    }
+
+    function confirmCreateSession() {
+      const nickname = document.getElementById("input-nickname").value.trim();
+      const key = document.getElementById("input-key").value.trim() || "";
+
+      if (!nickname) {
+        document.getElementById("nickname-error").style.display = "block";
+        return;
+      }
+
+      document.getElementById("nickname-error").style.display = "none";
+
+      const message = {
+        action: "create_session",
+        game_name: pendingGameName,
+        player: nickname,
+        key: key,
+      };
+
+      window._socket.send(JSON.stringify(message));
+      closeCreateModal();
+    }
+
+    document.getElementById("modal-cancel").onclick = closeCreateModal;
+    document.getElementById("modal-confirm").onclick = confirmCreateSession;
+    document.getElementById("input-nickname").addEventListener("keydown", (e) => {
+      if (e.key === "Enter") confirmCreateSession();
+    });
+    document.getElementById("input-key").addEventListener("keydown", (e) => {
+      if (e.key === "Enter") confirmCreateSession();
+    });
+    document.getElementById("create-modal").addEventListener("click", (e) => {
+      if (e.target === e.currentTarget) closeCreateModal();
+    });
+
+    function renderAll() {
+      tabsContainer.innerHTML = "";
+      tablesContainer.innerHTML = "";
+
+      const gameNames = [...gameConfig.game_name_list].sort((a, b) => a.localeCompare(b));
+
+      gameNames.forEach((name, index) => {
+        const game = gameInfo[name];
+        const sessions = sessionsData[name] || [];
+        const variants = game && game.variant ? game.variant : {};
+        const variantKeys = Object.keys(variants);
+
+        const btn = document.createElement("button");
+        btn.className = "tab-button" + (index === 0 ? " active" : "");
+        btn.textContent = name.charAt(0).toUpperCase() + name.slice(1);
+        btn.onclick = () => switchTab(btn, index);
+        tabsContainer.appendChild(btn);
+
+        const container = document.createElement("div");
+        container.className = "table-container" + (index === 0 ? " active" : "");
+        container.id = "table-" + index;
+
+        if (sessions.length > 0) {
+          const table = document.createElement("table");
+          table.innerHTML = `
+            <thead>
+              <tr>
+                <th>Code</th>
+                <th>Joueurs</th>
+              </tr>
+            </thead>
+            <tbody></tbody>
+          `;
+
+          const tbody = table.querySelector("tbody");
+          sessions.forEach(session => {
+            const row = document.createElement("tr");
+            const codeCell = document.createElement("td");
+            codeCell.textContent = session.code || "-";
+
+            const playersCell = document.createElement("td");
+            if (session.players && session.players.length > 0) {
+              session.players.forEach(player => {
+                const pBtn = document.createElement("button");
+                pBtn.className = "player-btn";
+                pBtn.textContent = player.nickname;
+                if (player.owner) {
+                  const badge = document.createElement("span");
+                  badge.className = "owner-badge";
+                  badge.textContent = "(owner)";
+                  pBtn.appendChild(badge);
+                }
+                playersCell.appendChild(pBtn);
+              });
+            } else {
+              playersCell.textContent = "-";
+            }
+
+            row.appendChild(codeCell);
+            row.appendChild(playersCell);
+            tbody.appendChild(row);
+          });
+
+          container.appendChild(table);
+        } else {
+          const emptyMsg = document.createElement("p");
+          emptyMsg.textContent = "Aucune session active.";
+          emptyMsg.style.color = "#888";
+          container.appendChild(emptyMsg);
+        }
+
+        if (variantKeys.length > 1) {
+          const dropdown = document.createElement("div");
+          dropdown.className = "create-dropdown";
+          dropdown.innerHTML = `
+            <button class="create-dropdown-btn">Create ▾</button>
+            <div class="create-dropdown-content" id="dropdown-${index}"></div>
+          `;
+          const dropdownContent = dropdown.querySelector(".create-dropdown-content");
+          variantKeys.forEach(vKey => {
+            const a = document.createElement("a");
+            a.textContent = variants[vKey].name;
+            a.onclick = (e) => {
+              e.stopPropagation();
+              dropdownContent.classList.remove("show");
+              openCreateModal(name);
+            };
+            dropdownContent.appendChild(a);
+          });
+          const dropdownBtn = dropdown.querySelector(".create-dropdown-btn");
+          dropdownBtn.onclick = () => {
+            dropdownContent.classList.toggle("show");
+          };
+          container.appendChild(dropdown);
+        } else {
+          const createBtn = document.createElement("button");
+          createBtn.textContent = "Create";
+          createBtn.className = "create-game-btn";
+          createBtn.onclick = () => openCreateModal(name);
+          container.appendChild(createBtn);
+        }
+
+        tablesContainer.appendChild(container);
+      });
+    }
+
+    function switchTab(btn, index) {
+      const buttons = tabsContainer.querySelectorAll(".tab-button");
+      buttons.forEach(b => b.classList.remove("active"));
+      btn.classList.add("active");
+
+      const containers = tablesContainer.querySelectorAll(".table-container");
+      containers.forEach(c => c.classList.remove("active"));
+      containers[index].classList.add("active");
+    }
+
+    document.addEventListener("click", (e) => {
+      if (!e.target.closest(".create-dropdown")) {
+        document.querySelectorAll(".create-dropdown-content").forEach(d => {
+          d.classList.remove("show");
+        });
+      }
+    });
+  </script>
+</body>
+</html>

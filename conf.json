@@ -1,0 +1,9 @@
+{
+  "host": "localhost",
+  "port": 12201,
+  "game_name_list": [
+    "Diplomacy",
+    "Waterloo",
+    "Vietnam"
+  ]
+}
