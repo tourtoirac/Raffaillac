@@ -157,8 +157,10 @@ try:
     raw_session = window.sessionStorage.getItem("obg_session")
     if raw_session:
         session_data = json.loads(raw_session)
-        game_json = session_data.get("game_json", {})
         session_key = session_data.get("key")
+        game_json = session_data.get("components")
+        if game_json is None:
+            game_json = session_data.get("session", {}).get("components", {})
 except Exception as e:
     print("Impossible de lire la session :", e)
 
@@ -173,19 +175,22 @@ else:
 # ------------------------
 
 boards = []
-for board in game_json.get("board", []):
+for item in game_json.get("fixed", []):
+    if item.get("kind") != "board":
+        continue
+
     img = Image.new()
-    img.src = board["src"]
+    img.src = item["src"]
 
     loaded_images.append(img)
 
     boards.append(
         {
             "image": img,
-            "x": board["x"],
-            "y": board["y"],
-            "width": board["width"],
-            "height": board["height"],
+            "x": item["x"],
+            "y": item["y"],
+            "width": item["width"],
+            "height": item["height"],
         }
     )
 
@@ -226,7 +231,9 @@ def create_counter(token):
     )
 
 
-for token in game_json.get("token", []):
+for token in game_json.get("movable", []):
+    if token.get("kind") != "token":
+        continue
     create_counter(token)
 
 
