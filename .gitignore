@@ -3,3 +3,7 @@ Vietnam/
 Waterloo/
 .idea/
 __pycache__/
+
+node_modules/
+dist/
+Legacy/

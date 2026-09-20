@@ -1,5 +1,0 @@
-packages = []
-
-[files]
-"counter.py" = "./counter.py"
-"button.py" = "./button.py"

@@ -156,8 +156,12 @@
       background-color: #e7f1ff;
       color: #007bff;
       border-radius: 4px;
-      cursor: default;
+      cursor: pointer;
       font-size: 0.9em;
+    }
+
+    .player-btn:hover {
+      background-color: #d0e4ff;
     }
 
     .owner-badge {
@@ -285,265 +289,24 @@
     </div>
   </div>
 
-  <script>
-    const statusElement = document.getElementById("status");
-    const tabsContainer = document.getElementById("tabs-container");
-    const tablesContainer = document.getElementById("tables-container");
+  <div id="join-modal" class="modal-overlay">
+    <div class="modal-form">
+      <h3>Rejoindre une session</h3>
 
-    let gameConfig = null;
-    let gameInfo = {};
-    let sessionsData = {};
+      <label for="join-nickname">Nickname</label>
+      <input type="text" id="join-nickname" readonly />
 
-    fetch("conf.json")
-      .then(response => response.json())
-      .then(config => {
-        gameConfig = config;
-        connectWebSocket();
-      })
-      .catch(err => {
-        statusElement.textContent = "Erreur chargement conf.json: " + err;
-      });
+      <label for="join-key">Key</label>
+      <input type="text" id="join-key" placeholder="Clé de session" />
+      <div id="join-key-error" class="error-msg">La clé est obligatoire.</div>
 
-    function connectWebSocket() {
-      const wsUrl = `ws://${gameConfig.host}:${gameConfig.port}`;
-      statusElement.textContent = "Connexion au serveur " + wsUrl + "...";
-      const socket = new WebSocket(wsUrl);
+      <div class="form-buttons">
+        <button class="btn-cancel" id="join-cancel">Annuler</button>
+        <button class="btn-confirm" id="join-confirm">Rejoindre</button>
+      </div>
+    </div>
+  </div>
 
-      socket.onopen = function () {
-        statusElement.textContent = "Connecté au serveur. Chargement des jeux...";
-        socket.send(JSON.stringify({
-          action: "list_game",
-          game_name_list: gameConfig.game_name_list
-        }));
-      };
-
-      socket.onmessage = function (event) {
-        try {
-          const data = JSON.parse(event.data);
-
-          if (data.event === "list_game") {
-            handleListGame(data);
-            socket.send(JSON.stringify({
-              action: "list_sessions",
-              game_name_list: gameConfig.game_name_list
-            }));
-          } else if (data.event === "sessions_info") {
-            handleSessionsInfo(data);
-          } else if (data.event === "session_created") {
-            handleSessionCreated(data);
-          }
-        } catch (e) {
-          console.error("Erreur parsing JSON:", e);
-        }
-      };
-
-      socket.onclose = function () {
-        statusElement.textContent = "Déconnecté. Reconnexion dans 3s...";
-        setTimeout(connectWebSocket, 3000);
-      };
-
-      socket.onerror = function () {
-        statusElement.textContent = "Erreur de connexion. Reconnexion dans 3s...";
-      };
-
-      window._socket = socket;
-    }
-
-    function handleListGame(data) {
-      gameInfo = {};
-      if (data.game_list) {
-        data.game_list.forEach(game => {
-          gameInfo[game.name] = game;
-        });
-      }
-    }
-
-    function handleSessionsInfo(data) {
-      sessionsData = data.content.active || {};
-      renderAll();
-    }
-
-    function handleSessionCreated(data) {
-      const session = data.session || {};
-      if (session.key) {
-        sessionStorage.setItem("obg_session", JSON.stringify(session));
-      }
-      window.location.href = "game.html";
-    }
-
-    let pendingGameName = null;
-
-    function openCreateModal(gameName) {
-      pendingGameName = gameName;
-      document.getElementById("input-nickname").value = "";
-      document.getElementById("input-key").value = "";
-      document.getElementById("nickname-error").style.display = "none";
-      document.getElementById("create-modal").classList.add("show");
-      document.getElementById("input-nickname").focus();
-    }
-
-    function closeCreateModal() {
-      document.getElementById("create-modal").classList.remove("show");
-      pendingGameName = null;
-    }
-
-    function confirmCreateSession() {
-      const nickname = document.getElementById("input-nickname").value.trim();
-      const key = document.getElementById("input-key").value.trim() || "";
-
-      if (!nickname) {
-        document.getElementById("nickname-error").style.display = "block";
-        return;
-      }
-
-      document.getElementById("nickname-error").style.display = "none";
-
-      const message = {
-        action: "create_session",
-        game_name: pendingGameName,
-        nickname: nickname,
-        key: key,
-      };
-
-      window._socket.send(JSON.stringify(message));
-      closeCreateModal();
-    }
-
-    document.getElementById("modal-cancel").onclick = closeCreateModal;
-    document.getElementById("modal-confirm").onclick = confirmCreateSession;
-    document.getElementById("input-nickname").addEventListener("keydown", (e) => {
-      if (e.key === "Enter") confirmCreateSession();
-    });
-    document.getElementById("input-key").addEventListener("keydown", (e) => {
-      if (e.key === "Enter") confirmCreateSession();
-    });
-    document.getElementById("create-modal").addEventListener("click", (e) => {
-      if (e.target === e.currentTarget) closeCreateModal();
-    });
-
-    function renderAll() {
-      tabsContainer.innerHTML = "";
-      tablesContainer.innerHTML = "";
-
-      const gameNames = [...gameConfig.game_name_list].sort((a, b) => a.localeCompare(b));
-
-      gameNames.forEach((name, index) => {
-        const game = gameInfo[name];
-        const sessions = sessionsData[name] || [];
-        const variants = game && game.variant ? game.variant : {};
-        const variantKeys = Object.keys(variants);
-
-        const btn = document.createElement("button");
-        btn.className = "tab-button" + (index === 0 ? " active" : "");
-        btn.textContent = name.charAt(0).toUpperCase() + name.slice(1);
-        btn.onclick = () => switchTab(btn, index);
-        tabsContainer.appendChild(btn);
-
-        const container = document.createElement("div");
-        container.className = "table-container" + (index === 0 ? " active" : "");
-        container.id = "table-" + index;
-
-        if (sessions.length > 0) {
-          const table = document.createElement("table");
-          table.innerHTML = `
-            <thead>
-              <tr>
-                <th>Code</th>
-                <th>Joueurs</th>
-              </tr>
-            </thead>
-            <tbody></tbody>
-          `;
-
-          const tbody = table.querySelector("tbody");
-          sessions.forEach(session => {
-            const row = document.createElement("tr");
-            const codeCell = document.createElement("td");
-            codeCell.textContent = session.code || "-";
-
-            const playersCell = document.createElement("td");
-            if (session.players && session.players.length > 0) {
-              session.players.forEach(player => {
-                const pBtn = document.createElement("button");
-                pBtn.className = "player-btn";
-                pBtn.textContent = player.nickname;
-                if (player.owner) {
-                  const badge = document.createElement("span");
-                  badge.className = "owner-badge";
-                  badge.textContent = "(owner)";
-                  pBtn.appendChild(badge);
-                }
-                playersCell.appendChild(pBtn);
-              });
-            } else {
-              playersCell.textContent = "-";
-            }
-
-            row.appendChild(codeCell);
-            row.appendChild(playersCell);
-            tbody.appendChild(row);
-          });
-
-          container.appendChild(table);
-        } else {
-          const emptyMsg = document.createElement("p");
-          emptyMsg.textContent = "Aucune session active.";
-          emptyMsg.style.color = "#888";
-          container.appendChild(emptyMsg);
-        }
-
-        if (variantKeys.length > 1) {
-          const dropdown = document.createElement("div");
-          dropdown.className = "create-dropdown";
-          dropdown.innerHTML = `
-            <button class="create-dropdown-btn">Create ▾</button>
-            <div class="create-dropdown-content" id="dropdown-${index}"></div>
-          `;
-          const dropdownContent = dropdown.querySelector(".create-dropdown-content");
-          variantKeys.forEach(vKey => {
-            const a = document.createElement("a");
-            a.textContent = variants[vKey].name;
-            a.onclick = (e) => {
-              e.stopPropagation();
-              dropdownContent.classList.remove("show");
-              openCreateModal(name);
-            };
-            dropdownContent.appendChild(a);
-          });
-          const dropdownBtn = dropdown.querySelector(".create-dropdown-btn");
-          dropdownBtn.onclick = () => {
-            dropdownContent.classList.toggle("show");
-          };
-          container.appendChild(dropdown);
-        } else {
-          const createBtn = document.createElement("button");
-          createBtn.textContent = "Create";
-          createBtn.className = "create-game-btn";
-          createBtn.onclick = () => openCreateModal(name);
-          container.appendChild(createBtn);
-        }
-
-        tablesContainer.appendChild(container);
-      });
-    }
-
-    function switchTab(btn, index) {
-      const buttons = tabsContainer.querySelectorAll(".tab-button");
-      buttons.forEach(b => b.classList.remove("active"));
-      btn.classList.add("active");
-
-      const containers = tablesContainer.querySelectorAll(".table-container");
-      containers.forEach(c => c.classList.remove("active"));
-      containers[index].classList.add("active");
-    }
-
-    document.addEventListener("click", (e) => {
-      if (!e.target.closest(".create-dropdown")) {
-        document.querySelectorAll(".create-dropdown-content").forEach(d => {
-          d.classList.remove("show");
-        });
-      }
-    });
-  </script>
+  <script type="module" src="/src/lobby.ts"></script>
 </body>
 </html>

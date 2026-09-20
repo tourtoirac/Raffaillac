@@ -1,0 +1,8 @@
+node_modules/
+dist/
+Legacy/
+.git/
+.gitignore
+.idea/
+__pycache__/
+*.log

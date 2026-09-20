@@ -3,9 +3,7 @@
 <head>
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1">
-  <title>Waterloo</title>
-  <link rel="stylesheet" href="https://pyscript.net/releases/2026.7.3/core.css">
-  <script type="module" src="https://pyscript.net/releases/2026.7.3/core.js"></script>
+  <title>Online Boardgames</title>
   <style>
     html,
     body {
@@ -34,6 +32,9 @@
       font-size: 14px;
       color: #ccc;
     }
+    header .game-title {
+      font-size: 16px;
+    }
     a.back {
       color: #ffd700;
       text-decoration: none;
@@ -57,7 +58,7 @@
 </head>
 <body>
   <header id="game-header">
-    <span>Waterloo</span>
+    <span class="game-title">Online Boardgames</span>
     <span class="session-info" id="session-info"></span>
     <a class="back" href="index.html">&larr; Quitter</a>
   </header>
@@ -66,6 +67,6 @@
     <canvas id="gameCanvas"></canvas>
   </div>
 
-  <script type="py" src="main.py"></script>
+  <script type="module" src="/src/game.ts"></script>
 </body>
 </html>
