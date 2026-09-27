@@ -11,6 +11,8 @@ export class Counter {
   x: number;
   y: number;
   border: boolean;
+  held: boolean;
+  heldBy: string | null;
   startTurnX: number;
   startTurnY: number;
 
@@ -33,6 +35,8 @@ export class Counter {
     this.moveBorder = moveBorder;
     this.shadow = shadow;
     this.border = moveBorder;
+    this.held = false;
+    this.heldBy = null;
     this.startTurnX = x;
     this.startTurnY = y;
   }
@@ -45,6 +49,12 @@ export class Counter {
 
   draw(ctx: CanvasRenderingContext2D): void {
     ctx.drawImage(this.image, this.x, this.y, this.width, this.height);
+
+    if (this.held) {
+      ctx.lineWidth = 5;
+      ctx.strokeStyle = "orange";
+      ctx.strokeRect(this.x, this.y, this.width, this.height);
+    }
 
     if (this.border) {
       ctx.lineWidth = 5;

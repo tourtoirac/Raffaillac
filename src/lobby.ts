@@ -66,7 +66,8 @@ function handleServerMessage(data: ServerMessage): void {
       });
     } else if (data.event === "sessions_info") {
       handleSessionsInfo(data as unknown as SessionsInfoEvent);
-    } else if (data.event === "session_created") {
+    } else if (data.event === "session_created" || data.event === "session_joined") {
+      // message de session reçu après create_session ou join_session
       handleSessionCreated(data as unknown as SessionCreatedEvent);
     } else if (data.event === "server_shutdown") {
       statusElement.textContent = "Le serveur va s'éteindre. Déconnexion...";

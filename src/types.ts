@@ -33,9 +33,7 @@ export interface SessionComponents {
 export interface Session {
   key: string;
   components?: SessionComponents;
-  session?: { components?: SessionComponents };
   players?: SessionPlayer[];
-  [key: string]: unknown;
 }
 
 export interface SessionPlayer {
@@ -61,6 +59,30 @@ export interface ListGameEvent {
   game_list?: GameInfo[];
 }
 
+// message de session reçu après create_session ou join_session
 export interface SessionCreatedEvent {
   session?: Session;
+}
+
+// accusé d'acquisition / de relâchement, diffusé à tous les joueurs de la session
+interface HandEventBase {
+  component_id: string;
+  user: string;
+  success: boolean;
+}
+
+export interface AcquireEvent extends HandEventBase {
+  event: "acquire";
+}
+
+export interface ReleaseEvent extends HandEventBase {
+  event: "release";
+}
+
+// nouvelle position d'un composant, reçue des autres joueurs de la session
+export interface MoveEvent {
+  event: "move";
+  component_id: string;
+  x: number;
+  y: number;
 }
