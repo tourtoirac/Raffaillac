@@ -10,11 +10,13 @@ export class Counter {
 
   x: number;
   y: number;
+  /** rectangle vert : piloté par le serveur, valable pour tous */
   border: boolean;
   held: boolean;
   heldBy: string | null;
-  startTurnX: number;
-  startTurnY: number;
+  /** emplacement initial du jeu : y revenir rend le rectangle vert */
+  initialX: number;
+  initialY: number;
 
   constructor(
     name: string,
@@ -37,14 +39,8 @@ export class Counter {
     this.border = moveBorder;
     this.held = false;
     this.heldBy = null;
-    this.startTurnX = x;
-    this.startTurnY = y;
-  }
-
-  startTurnReset(): void {
-    this.startTurnX = this.x;
-    this.startTurnY = this.y;
-    this.border = this.moveBorder;
+    this.initialX = x;
+    this.initialY = y;
   }
 
   draw(ctx: CanvasRenderingContext2D): void {
@@ -85,8 +81,8 @@ export class Counter {
   }
 
   hasMoved(): boolean {
-    const dx = this.x - this.startTurnX;
-    const dy = this.y - this.startTurnY;
+    const dx = this.x - this.initialX;
+    const dy = this.y - this.initialY;
     return dx * dx + dy * dy > MOVE_THRESHOLD * MOVE_THRESHOLD;
   }
 }

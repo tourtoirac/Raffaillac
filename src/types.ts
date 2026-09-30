@@ -23,6 +23,7 @@ export interface TokenItem {
   height: number;
   move_border?: boolean;
   shadow?: boolean;
+  border?: boolean;
 }
 
 export interface SessionComponents {
@@ -71,6 +72,8 @@ export interface ListGameEvent {
 // message de session reçu après create_session ou join_session
 export interface SessionCreatedEvent {
   session?: Session;
+  // rôle de ce client dans la session : seuls les joueurs peuvent agir
+  role?: "player" | "watcher";
 }
 
 // accusé d'acquisition / de relâchement, diffusé à tous les joueurs de la session
@@ -95,6 +98,15 @@ export interface ComponentState {
   id: string;
   x: number;
   y: number;
+  /** rectangle vert : false une fois le jeton déplacé */
+  border?: boolean;
+  move_border?: boolean;
+}
+
+// le joueur a remis le rectangle vert sur tous les jetons
+export interface FixPositionsEvent {
+  event: "fix_positions";
+  components: ComponentState[];
 }
 
 // nouvelle position d'un composant, reçue des autres joueurs de la session

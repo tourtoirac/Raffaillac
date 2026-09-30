@@ -6,10 +6,13 @@ import { loadPlayerIdentity, loadSession, storeSession } from "./session";
 import type {
   AcquireEvent,
   BoardItem,
+  ComponentState,
+  FixPositionsEvent,
   MoveEvent,
   ReleaseEvent,
   Session,
   SessionComponents,
+  SessionCreatedEvent,
   TokenItem,
 } from "./types";
 import { getSocket } from "./ws/wsClient";
@@ -66,6 +69,9 @@ let boards: Board[] = [];
 let counters: Counter[] = [];
 const countersById = new Map<string, Counter>();
 
+// un spectateur regarde mais ne joue pas : pas de bouton "fixe la position"
+let isWatcher = false;
+
 function loadComponents(components: SessionComponents | undefined): void {
   boards = (components?.fixed ?? [])
     .filter((item) => item.kind === "board")
@@ -78,7 +84,7 @@ function loadComponents(components: SessionComponents | undefined): void {
       const token = item as TokenItem;
       const img = new Image();
       img.src = token.front_src;
-      return new Counter(
+      const counter = new Counter(
         token.id,
         img,
         token.x,
@@ -88,6 +94,9 @@ function loadComponents(components: SessionComponents | undefined): void {
         token.move_border ?? true,
         token.shadow ?? false,
       );
+      // l'état du rectangle vient du serveur
+      if (typeof token.border === "boolean") counter.border = token.border;
+      return counter;
     });
 
   for (const counter of counters) {
@@ -100,10 +109,19 @@ function loadComponents(components: SessionComponents | undefined): void {
   cameraInitialized = false;
 }
 
+// le serveur fait autorité sur le rectangle vert
+function applyComponentState(state: ComponentState | undefined): void {
+  if (!state) return;
+  const counter = countersById.get(state.id);
+  if (!counter) return;
+  counter.x = state.x;
+  counter.y = state.y;
+  if (typeof state.border === "boolean") counter.border = state.border;
+}
+
 const buttonFix = new Button(1350, 10, 220, 40, "Fixe la position", () => {
-  for (const counter of counters) {
-    counter.startTurnReset();
-  }
+  // le serveur remet le rectangle vert et prévient joueurs et spectateurs
+  getSocket()?.send({ action: "fix_positions" });
 });
 
 // -------------------------------------------------
@@ -185,14 +203,11 @@ function flushMoves(): void {
 }
 
 function dropCounter(counter: Counter): void {
-  if (counter.moveBorder) {
-    if (counter.hasMoved()) {
-      counter.border = false;
-    } else {
-      counter.border = true;
-      counter.x = counter.startTurnX;
-      counter.y = counter.startTurnY;
-    }
+  // un jeton lache sans avoir quitte sa place est recale exactement sur son
+  // emplacement initial : le serveur lui rendra son rectangle vert
+  if (counter.moveBorder && !counter.hasMoved()) {
+    counter.x = counter.initialX;
+    counter.y = counter.initialY;
   }
 }
 
@@ -210,12 +225,9 @@ function applyHandEvent(answer: HandEvent, isOwnRequest: boolean): void {
 
   // au lâcher, Tourtoirac renvoie la position validée : c'est elle qui fait
   // réapparaître le pion chez les autres joueurs, à l'endroit réel.
+  // Le rectangle vert voyage dans le même message.
   if (answer.event === "release") {
-    const placed = (answer as ReleaseEvent).component_json;
-    if (placed) {
-      counter.x = placed.x;
-      counter.y = placed.y;
-    }
+    applyComponentState((answer as ReleaseEvent).component_json);
   }
 
   // les messages des autres joueurs sont affichés plus tard
@@ -233,8 +245,8 @@ function applyHandEvent(answer: HandEvent, isOwnRequest: boolean): void {
     counter.held = false;
     if (handAnchor === counter) handAnchor = hand[0] ?? null;
 
-    // le composant relâché reprend la règle de repositionnement
-    if (index >= 0) dropCounter(counter);
+    // pas de recalage ici : il a été fait avant l'envoi du release, et
+    // applyComponentState a posé la position renvoyée par le serveur
   }
 
   if (hand.length > 0) {
@@ -294,7 +306,16 @@ function requestRelease(counter: Counter): void {
   const socket = getSocket();
   if (!socket) return;
 
-  const message = { action: "release", component_id: counter.name };
+  // le serveur reçoit ainsi la position de dépôt réelle et peut renvoyer le
+  // rectangle vert si le jeton a retrouvé son emplacement initial
+  dropCounter(counter);
+
+  const message = {
+    action: "release",
+    component_id: counter.name,
+    x: counter.x,
+    y: counter.y,
+  };
   setPending("release", counter.name);
   socket.send(message);
   console.log("[WS] Envoyé :", JSON.stringify(message));
@@ -307,7 +328,7 @@ function onMouseDown(event: MouseEvent): void {
   lastMouseWorldX = wx;
   lastMouseWorldY = wy;
 
-  if (buttonFix.contains(wx, wy)) {
+  if (!isWatcher && buttonFix.contains(wx, wy)) {
     buttonFix.callback();
     return;
   }
@@ -414,7 +435,8 @@ function draw(): void {
     }
   }
 
-  buttonFix.draw(ctx);
+  // le bouton de repositionnement est réservé aux joueurs
+  if (!isWatcher) buttonFix.draw(ctx);
 
   for (const counter of counters) {
     if (counter.image.complete) {
@@ -462,6 +484,8 @@ function handleServerMessage(raw: unknown): void {
       applyHandEvent(answer, isOwnRequest);
     } else if (data.event === "move") {
       applyRemoteMove(data as unknown as MoveEvent);
+    } else if (data.event === "fix_positions") {
+      applyFixPositions(data as unknown as FixPositionsEvent);
     } else if (data.event === "session_created" || data.event === "session_joined") {
       handleSessionEvent(data);
     }
@@ -475,19 +499,34 @@ function handleServerMessage(raw: unknown): void {
 function applyRemoteMove(message: MoveEvent): void {
   const counter = countersById.get(message.component_id);
   if (!counter) return;
-  if (hand.includes(counter)) return;
 
-  // Tourtoirac envoie la position sous "coordinates"
-  const position = message.coordinates;
-  if (!position) return;
-  counter.x = position.x;
-  counter.y = position.y;
+  const state = message.coordinates;
+  if (!state) return;
+
+  // le rectangle vert est synchronisé même pour celui qui déplace
+  if (typeof state.border === "boolean") counter.border = state.border;
+
+  // la position, elle, suit la souris locale tant que le jeton est en main
+  if (hand.includes(counter)) return;
+  counter.x = state.x;
+  counter.y = state.y;
+}
+
+// un joueur a remis le rectangle vert : appliqué par tous les écrans
+function applyFixPositions(message: FixPositionsEvent): void {
+  for (const component of message.components ?? []) {
+    applyComponentState(component);
+  }
 }
 
 function handleSessionEvent(data: GameServerMessage): void {
   const session = data.session;
   if (!session?.key) return;
   if (currentSession && session.key !== currentSession.key) return;
+
+  // le serveur fait foi : c'est lui qui dit si l'on joue ou si l'on regarde
+  const event = data as unknown as SessionCreatedEvent;
+  if (event.role) isWatcher = event.role === "watcher";
 
   currentSession = session;
   storeSession(session);
