@@ -2,6 +2,7 @@ import { Button } from "./engine/button";
 import { allBoardsLoaded, boardDims, createBoard } from "./engine/board";
 import type { Board } from "./engine/board";
 import { Counter } from "./engine/counter";
+import { lobbyReturnUrl, originGameName } from "./navigation";
 import { loadPlayerIdentity, loadSession, storeSession } from "./session";
 import type {
   AcquireEvent,
@@ -202,15 +203,6 @@ function flushMoves(): void {
   }
 }
 
-function dropCounter(counter: Counter): void {
-  // un jeton lache sans avoir quitte sa place est recale exactement sur son
-  // emplacement initial : le serveur lui rendra son rectangle vert
-  if (counter.moveBorder && !counter.hasMoved()) {
-    counter.x = counter.initialX;
-    counter.y = counter.initialY;
-  }
-}
-
 // Le serveur accuse réception de chaque acquisition / relâchement :
 // la main est reconstruite à partir de ces accusés, un composant à la fois.
 function applyHandEvent(answer: HandEvent, isOwnRequest: boolean): void {
@@ -306,10 +298,8 @@ function requestRelease(counter: Counter): void {
   const socket = getSocket();
   if (!socket) return;
 
-  // le serveur reçoit ainsi la position de dépôt réelle et peut renvoyer le
-  // rectangle vert si le jeton a retrouvé son emplacement initial
-  dropCounter(counter);
-
+  // on envoie la position brute du dépôt : c'est le serveur qui décide du
+  // recadrage et du rectangle vert, puis qui renvoie l'état corrigé
   const message = {
     action: "release",
     component_id: counter.name,
@@ -541,6 +531,13 @@ function handleSessionEvent(data: GameServerMessage): void {
 // -------------------------------------------------
 // Initialisation
 // -------------------------------------------------
+
+// le lien de retour ramène sur l'onglet du jeu d'origine ; repli index.html
+// si la page a été ouverte sans paramètre (lien direct, marque-page)
+const backLink = document.getElementById("back-link") as HTMLAnchorElement | null;
+if (backLink) {
+  backLink.href = lobbyReturnUrl(originGameName());
+}
 
 loadComponents(currentSession?.components);
 

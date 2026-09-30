@@ -1,3 +1,4 @@
+import { gameEntryUrl } from "./navigation";
 import { storePlayerIdentity, storeSession } from "./session";
 import type {
   ActiveSession,
@@ -48,6 +49,25 @@ function selectedGameIndex(gameNames: string[]): number {
   }
   return 0;
 }
+
+// seuls les jeux présents dans sessions_info sont affichés
+function visibleGameNames(): string[] {
+  if (!config) return [];
+  return [...config.game_name_list]
+    .filter((name) => name in sessionsData)
+    .sort((a, b) => a.localeCompare(b));
+}
+
+// nom du jeu réellement affiché : selectedGame peut être absent de la liste
+function activeGameName(): string | null {
+  const gameNames = visibleGameNames();
+  return gameNames[selectedGameIndex(gameNames)] ?? null;
+}
+
+// jeu de la partie en cours d'ouverture. Il doit survivre à la fermeture des
+// modales, donc il est mémorisé au moment de la confirmation et pas lu depuis
+// l'onglet courant à la réception de la réponse.
+let openingGameName: string | null = null;
 
 // -------------------------------------------------
 // Journal du cartouche : les N derniers messages reçus
@@ -177,7 +197,7 @@ function handleSessionCreated(data: SessionCreatedEvent): void {
   if (session?.key) {
     storeSession(session);
   }
-  window.location.href = "game.html";
+  window.location.href = gameEntryUrl(openingGameName ?? activeGameName());
 }
 
 // -------------------------------------------------
@@ -254,6 +274,7 @@ function confirmCreateSession(): void {
 
   const playersVisible =
     (document.getElementById("players-fields") as HTMLDivElement).classList.contains("show");
+  openingGameName = gameName;
   const message: Record<string, unknown> = {
     action: "create_session",
     game_name: gameName,
@@ -283,7 +304,7 @@ function confirmCreateSession(): void {
 // Modale d'adhésion
 // -------------------------------------------------
 
-let pendingJoin: { sessionCode: string; nickname: string } | null = null;
+let pendingJoin: { sessionCode: string; nickname: string; gameName: string } | null = null;
 
 function isSessionFull(session: ActiveSession): boolean {
   const max = session.max_players;
@@ -291,8 +312,10 @@ function isSessionFull(session: ActiveSession): boolean {
   return (session.players?.length ?? 0) >= max;
 }
 
-function openJoinModal(sessionCode: string, nickname: string): void {
-  pendingJoin = { sessionCode, nickname };
+// le jeu est mémorisé dès l'ouverture de la modale : l'onglet peut changer
+// avant la réponse du serveur
+function openJoinModal(sessionCode: string, nickname: string, gameName: string): void {
+  pendingJoin = { sessionCode, nickname, gameName };
   const nicknameInput = document.getElementById("join-nickname") as HTMLInputElement;
   nicknameInput.value = nickname;
   // un pseudo fourni reste verrouillé, sinon le joueur le saisit
@@ -327,6 +350,7 @@ function confirmJoinSession(): void {
   }
   hideError("join-key-error");
 
+  openingGameName = pendingJoin.gameName;
   getSocket()?.send({
     action: "join_session",
     session_code: pendingJoin.sessionCode,
@@ -359,10 +383,7 @@ function renderAll(): void {
   tabsContainer.innerHTML = "";
   tablesContainer.innerHTML = "";
 
-  // seuls les jeux présents dans sessions_info sont affichés
-  const gameNames = [...config.game_name_list]
-    .filter((name) => name in sessionsData)
-    .sort((a, b) => a.localeCompare(b));
+  const gameNames = visibleGameNames();
 
   if (gameNames.length === 0) {
     const emptyMsg = document.createElement("p");
@@ -415,7 +436,7 @@ function renderAll(): void {
             const pBtn = document.createElement("button");
             pBtn.className = "player-btn";
             pBtn.textContent = player.nickname;
-            pBtn.onclick = () => openJoinModal(session.code ?? "", player.nickname);
+            pBtn.onclick = () => openJoinModal(session.code ?? "", player.nickname, name);
             if (player.owner) {
               const badge = document.createElement("span");
               badge.className = "owner-badge";
@@ -436,7 +457,7 @@ function renderAll(): void {
           joinBtn.className = "join-session-btn";
           joinBtn.textContent = "Join";
           // aucun pseudo prérempli : le joueur choisit son propre nom
-          joinBtn.onclick = () => openJoinModal(session.code ?? "", "");
+          joinBtn.onclick = () => openJoinModal(session.code ?? "", "", name);
           actionCell.appendChild(joinBtn);
         }
 

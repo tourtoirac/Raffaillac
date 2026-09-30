@@ -1,5 +1,3 @@
-const MOVE_THRESHOLD = 30;
-
 export class Counter {
   readonly name: string;
   readonly image: HTMLImageElement;
@@ -14,9 +12,6 @@ export class Counter {
   border: boolean;
   held: boolean;
   heldBy: string | null;
-  /** emplacement initial du jeu : y revenir rend le rectangle vert */
-  initialX: number;
-  initialY: number;
 
   constructor(
     name: string,
@@ -39,8 +34,6 @@ export class Counter {
     this.border = moveBorder;
     this.held = false;
     this.heldBy = null;
-    this.initialX = x;
-    this.initialY = y;
   }
 
   draw(ctx: CanvasRenderingContext2D): void {
@@ -78,11 +71,5 @@ export class Counter {
       this.y <= y &&
       y <= this.y + this.height
     );
-  }
-
-  hasMoved(): boolean {
-    const dx = this.x - this.initialX;
-    const dy = this.y - this.initialY;
-    return dx * dx + dy * dy > MOVE_THRESHOLD * MOVE_THRESHOLD;
   }
 }
