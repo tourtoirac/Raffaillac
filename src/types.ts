@@ -86,12 +86,21 @@ export interface AcquireEvent extends HandEventBase {
 
 export interface ReleaseEvent extends HandEventBase {
   event: "release";
+  // position à jour du composant au moment du lâcher
+  component_json?: ComponentState;
+}
+
+// sous-ensemble de return_json() renvoyé par Tourtoirac pour un composant
+export interface ComponentState {
+  id: string;
+  x: number;
+  y: number;
 }
 
 // nouvelle position d'un composant, reçue des autres joueurs de la session
 export interface MoveEvent {
   event: "move";
   component_id: string;
-  x: number;
-  y: number;
+  // Tourtoirac imbrique la position sous "coordinates"
+  coordinates: ComponentState;
 }

@@ -22,9 +22,7 @@ RUN apk add --no-cache curl \
 COPY --from=build /app/dist /usr/share/nginx/html/
 
 # Ressources de jeu (plateaux, pions, règles) aux mêmes chemins qu'à l'origine
-COPY Waterloo/ /usr/share/nginx/html/Waterloo/
-COPY Vietnam/ /usr/share/nginx/html/Vietnam/
-COPY Diplomacy/ /usr/share/nginx/html/Diplomacy/
+COPY Games/ /usr/share/nginx/html/Games/
 
 COPY entrypoint.sh /entrypoint.sh
 RUN chmod +x /entrypoint.sh

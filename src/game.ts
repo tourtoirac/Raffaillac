@@ -208,6 +208,16 @@ function applyHandEvent(answer: HandEvent, isOwnRequest: boolean): void {
   // identité du détenteur, pour tous les joueurs de la session
   counter.heldBy = answer.event === "acquire" ? answer.user : null;
 
+  // au lâcher, Tourtoirac renvoie la position validée : c'est elle qui fait
+  // réapparaître le pion chez les autres joueurs, à l'endroit réel.
+  if (answer.event === "release") {
+    const placed = (answer as ReleaseEvent).component_json;
+    if (placed) {
+      counter.x = placed.x;
+      counter.y = placed.y;
+    }
+  }
+
   // les messages des autres joueurs sont affichés plus tard
   if (!isOwnRequest) return;
 
@@ -467,8 +477,11 @@ function applyRemoteMove(message: MoveEvent): void {
   if (!counter) return;
   if (hand.includes(counter)) return;
 
-  counter.x = message.x;
-  counter.y = message.y;
+  // Tourtoirac envoie la position sous "coordinates"
+  const position = message.coordinates;
+  if (!position) return;
+  counter.x = position.x;
+  counter.y = position.y;
 }
 
 function handleSessionEvent(data: GameServerMessage): void {
