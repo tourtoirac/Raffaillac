@@ -2,7 +2,7 @@ import { Button } from "./engine/button";
 import { allBoardsLoaded, boardDims, createBoard } from "./engine/board";
 import type { Board } from "./engine/board";
 import { Counter } from "./engine/counter";
-import { loadSession, storeSession } from "./session";
+import { loadPlayerIdentity, loadSession, storeSession } from "./session";
 import type {
   AcquireEvent,
   BoardItem,
@@ -499,6 +499,18 @@ if (socket) {
   socket.setStateHandler((message) => {
     if (!message.connected) {
       clearPending();
+      return;
+    }
+    // le lobby et le jeu sont deux pages distinctes : le jeu ouvre sa propre
+    // connexion, qui doit revendiquer la session avant tout acquire/move.
+    if (currentSession?.key) {
+      const identity = loadPlayerIdentity();
+      socket.send({
+        action: "resume_session",
+        session_key: currentSession.key,
+        nickname: identity?.name ?? "Anonymous",
+        role: identity?.role ?? "player",
+      });
     }
   });
 }

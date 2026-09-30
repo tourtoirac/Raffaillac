@@ -23,6 +23,33 @@
       border-radius: 4px;
     }
 
+    #status .status-line {
+      color: #888;
+      font-size: 0.85em;
+    }
+
+    #status .status-line:last-child {
+      color: #333;
+      font-size: 1em;
+    }
+
+    #status .status-line-expandable {
+      cursor: pointer;
+    }
+
+    #status .status-line-expandable:hover {
+      background-color: #e8e8e8;
+    }
+
+    #status .status-line-expandable:not(.status-line-expanded) {
+      white-space: nowrap;
+      overflow: hidden;
+    }
+
+    #status .status-line-expanded {
+      overflow-wrap: anywhere;
+    }
+
     #layout {
       display: flex;
       align-items: flex-start;
@@ -164,6 +191,42 @@
       background-color: #d0e4ff;
     }
 
+    .join-session-btn {
+      padding: 6px 12px;
+      margin: 2px;
+      border: 1px solid #28a745;
+      background-color: #e8f7ec;
+      color: #1d7a33;
+      border-radius: 4px;
+      cursor: pointer;
+      font-size: 0.9em;
+    }
+
+    .join-session-btn:hover {
+      background-color: #d1ecda;
+    }
+
+    td.join-actions {
+      display: flex;
+      flex-direction: column;
+      align-items: stretch;
+    }
+
+    .watch-session-btn {
+      padding: 6px 12px;
+      margin: 2px;
+      border: 1px solid #bbb;
+      background-color: #f0f0f0;
+      color: #666;
+      border-radius: 4px;
+      cursor: pointer;
+      font-size: 0.9em;
+    }
+
+    .watch-session-btn:hover {
+      background-color: #e2e2e2;
+    }
+
     .owner-badge {
       font-size: 0.75em;
       color: #888;
@@ -188,6 +251,7 @@
     }
 
     .modal-form {
+      position: relative;
       background-color: white;
       padding: 25px;
       border-radius: 8px;
@@ -195,9 +259,29 @@
       min-width: 320px;
     }
 
+    .modal-form .modal-close {
+      position: absolute;
+      top: 8px;
+      right: 10px;
+      width: auto;
+      padding: 2px 8px;
+      margin-bottom: 0;
+      border: none;
+      background: transparent;
+      color: #666;
+      font-size: 22px;
+      line-height: 1;
+      cursor: pointer;
+    }
+
+    .modal-form .modal-close:hover {
+      color: #000;
+    }
+
     .modal-form h3 {
       margin-top: 0;
       margin-bottom: 15px;
+      padding-right: 24px;
     }
 
     .modal-form label {
@@ -222,6 +306,30 @@
       justify-content: flex-end;
       gap: 10px;
       margin-top: 10px;
+    }
+
+    .modal-form .checkbox-row {
+      display: flex;
+      align-items: center;
+      gap: 8px;
+      margin-bottom: 12px;
+    }
+
+    .modal-form .checkbox-row input[type="checkbox"] {
+      width: auto;
+      margin-bottom: 0;
+    }
+
+    .modal-form .checkbox-row label {
+      margin-bottom: 0;
+    }
+
+    #players-fields {
+      display: none;
+    }
+
+    #players-fields.show {
+      display: block;
     }
 
     .modal-form .form-buttons button {
@@ -274,15 +382,32 @@
 
   <div id="create-modal" class="modal-overlay">
     <div class="modal-form">
+      <button class="modal-close" id="create-modal-close" type="button" aria-label="Fermer">&times;</button>
       <h3>Créer une session</h3>
       <label for="input-nickname">Nickname (obligatoire)</label>
       <input type="text" id="input-nickname" placeholder="Votre pseudo" />
       <div id="nickname-error" class="error-msg">Le nickname est obligatoire.</div>
 
-      <label for="input-key">Key (optionnel)</label>
-      <input type="text" id="input-key" placeholder="Clé de session" />
+    <label for="input-key">Key (optionnel)</label>
+    <input type="text" id="input-key" placeholder="Clé de session" />
 
-      <div class="form-buttons">
+    <div id="players-fields">
+      <label for="input-min-players">Joueurs minimum</label>
+      <input type="number" id="input-min-players" min="1" step="1" />
+
+      <label for="input-max-players">Joueurs maximum</label>
+      <input type="number" id="input-max-players" min="1" step="1" />
+    </div>
+
+    <label for="input-access-key">Clé d'accès au jeu (optionnel)</label>
+    <input type="text" id="input-access-key" placeholder="Clé d'accès au jeu" />
+
+    <div class="checkbox-row">
+      <input type="checkbox" id="input-allow-watchers" />
+      <label for="input-allow-watchers">Permettre les spectateurs</label>
+    </div>
+
+    <div class="form-buttons">
         <button class="btn-cancel" id="modal-cancel">Annuler</button>
         <button class="btn-confirm" id="modal-confirm">Créer</button>
       </div>
@@ -291,10 +416,12 @@
 
   <div id="join-modal" class="modal-overlay">
     <div class="modal-form">
+      <button class="modal-close" id="join-modal-close" type="button" aria-label="Fermer">&times;</button>
       <h3>Rejoindre une session</h3>
 
       <label for="join-nickname">Nickname</label>
       <input type="text" id="join-nickname" readonly />
+      <div id="join-nickname-error" class="error-msg">Le nickname est obligatoire.</div>
 
       <label for="join-key">Key</label>
       <input type="text" id="join-key" placeholder="Clé de session" />

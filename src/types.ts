@@ -41,14 +41,23 @@ export interface SessionPlayer {
   owner?: boolean;
 }
 
+export interface GameVariantInfo {
+  name: string;
+  min_players?: number;
+  max_players?: number;
+  max_watchers?: number;
+}
+
 export interface GameInfo {
   name: string;
-  variant?: Record<string, { name: string }>;
+  variant?: Record<string, GameVariantInfo>;
 }
 
 export interface ActiveSession {
   code?: string;
   players?: SessionPlayer[];
+  max_players?: number;
+  max_watchers?: number;
 }
 
 export interface SessionsInfoEvent {
