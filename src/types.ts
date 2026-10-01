@@ -24,6 +24,10 @@ export interface TokenItem {
   move_border?: boolean;
   shadow?: boolean;
   border?: boolean;
+  /** le jeu autorise-t-il les zones de rotation sur ce pion */
+  orientable?: boolean;
+  /** angle courant, en degrés vers la droite */
+  orientation?: number;
 }
 
 export interface DiceItem {
@@ -144,4 +148,12 @@ export interface RollEvent {
   src: string;
   /** délai avant le prochain lancer, en secondes */
   cooldown_seconds: number;
+}
+
+// un joueur a fait pivoter un pion, diffusé à toute la session
+export interface RotateEvent {
+  event: "rotate";
+  component_id: string;
+  /** nouvel angle, en degrés vers la droite, ramené dans [0, 360) */
+  orientation: number;
 }

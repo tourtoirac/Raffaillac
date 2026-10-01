@@ -2,6 +2,7 @@ import { Button } from "./engine/button";
 import { allBoardsLoaded, boardDims, createBoard } from "./engine/board";
 import type { Board } from "./engine/board";
 import { Counter } from "./engine/counter";
+import type { RotationDirection } from "./engine/counter";
 import { Dice } from "./engine/dice";
 import { lobbyReturnUrl, originGameName } from "./navigation";
 import { loadPlayerIdentity, loadSession, storeSession } from "./session";
@@ -14,6 +15,7 @@ import type {
   MoveEvent,
   ReleaseEvent,
   RollEvent,
+  RotateEvent,
   Session,
   SessionComponents,
   SessionCreatedEvent,
@@ -107,6 +109,10 @@ function loadComponents(components: SessionComponents | undefined): void {
         token.height,
         token.move_border ?? true,
         token.shadow ?? false,
+        // un pion non orientable n'affiche aucune zone de rotation
+        token.orientable ?? false,
+        // l'angle atteint avant une sauvegarde de session, s'il y en a une
+        token.orientation ?? 0,
       );
       // l'état du rectangle vient du serveur
       if (typeof token.border === "boolean") counter.border = token.border;
@@ -138,6 +144,7 @@ function loadComponents(components: SessionComponents | undefined): void {
 
   hand = [];
   handAnchor = null;
+  hoveredCounter = null;
   clearPending();
   cameraInitialized = false;
 }
@@ -342,6 +349,29 @@ function hitCounter(wx: number, wy: number): Counter | null {
   return null;
 }
 
+// le pion sous le pointeur : ses zones de rotation ne s'affichent que pour
+// celui-là, et seulement si la main est vide
+let hoveredCounter: Counter | null = null;
+
+function requestRotate(counter: Counter, direction: RotationDirection): void {
+  const socket = getSocket();
+  if (!socket) return;
+
+  // pas de rotation optimiste : on attend l'angle que le serveur renvoie. S'il
+  // refuse (pion en main, jeu qui l'interdit), l'écran ne doit pas mentir sur
+  // un angle que personne d'autre ne partage
+  const message = { action: "rotate", component_id: counter.name, direction };
+  socket.send(message);
+  console.log("[WS] Envoyé :", JSON.stringify(message));
+}
+
+// le pion a tourné : appliqué par tous les écrans, comme le lancer du dé
+function applyRotate(message: RotateEvent): void {
+  const counter = countersById.get(message.component_id);
+  if (!counter) return;
+  counter.orientation = message.orientation;
+}
+
 function requestAcquire(counter: Counter): void {
   const socket = getSocket();
   if (!socket) return;
@@ -405,6 +435,16 @@ function onMouseDown(event: MouseEvent): void {
     // clic sur un pion : demande d'acquisition
     const hit = hitCounter(wx, wy);
     if (hit !== null) {
+      // avant de le prendre en main, on vérifie si le clic visait une zone de
+      // rotation. Ces zones n'existent pas pendant qu'on tient un pion : le
+      // repère est déjà occupé par ce qu'on déplace.
+      if (hand.length === 0) {
+        const zone = hit.rotationZoneAt(wx, wy);
+        if (zone !== null) {
+          requestRotate(hit, zone);
+          return;
+        }
+      }
       requestAcquire(hit);
       return;
     }
@@ -424,6 +464,10 @@ function onMouseMove(event: MouseEvent): void {
   const [wx, wy] = screenToWorld(sx, sy);
   lastMouseWorldX = wx;
   lastMouseWorldY = wy;
+
+  // le pion survolé alimente l'affichage des zones de rotation. Il change dès
+  // que la main se vide ou se remplit : les zones suivent cette condition.
+  hoveredCounter = isWatcher || hand.length > 0 ? null : hitCounter(wx, wy);
 
   if (panning) {
     cameraX -= (sx - lastMouseX) / zoom;
@@ -504,6 +548,13 @@ function draw(): void {
     }
   }
 
+  // les zones de rotation par-dessus le pion survolé. Elles ne s'affichent que
+  // pour un joueur, pion orientable, main vide : un pion qu'on s'apprête à
+  // saisir n'a pas besoin de ce repère, et un spectateur n'agit pas sur le jeu
+  if (!isWatcher && hand.length === 0 && hoveredCounter?.orientable) {
+    hoveredCounter.drawRotationZones(ctx);
+  }
+
   for (const dice of dices) {
     const image = dice.face();
     if (!image?.complete) continue;
@@ -558,6 +609,8 @@ function handleServerMessage(raw: unknown): void {
       applyRemoteMove(data as unknown as MoveEvent);
     } else if (data.event === "roll") {
       applyRoll(data as unknown as RollEvent);
+    } else if (data.event === "rotate") {
+      applyRotate(data as unknown as RotateEvent);
     } else if (data.event === "fix_positions") {
       applyFixPositions(data as unknown as FixPositionsEvent);
     } else if (data.event === "session_created" || data.event === "session_joined") {
