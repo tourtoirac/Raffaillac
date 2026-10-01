@@ -2,15 +2,18 @@ import { Button } from "./engine/button";
 import { allBoardsLoaded, boardDims, createBoard } from "./engine/board";
 import type { Board } from "./engine/board";
 import { Counter } from "./engine/counter";
+import { Dice } from "./engine/dice";
 import { lobbyReturnUrl, originGameName } from "./navigation";
 import { loadPlayerIdentity, loadSession, storeSession } from "./session";
 import type {
   AcquireEvent,
   BoardItem,
   ComponentState,
+  DiceItem,
   FixPositionsEvent,
   MoveEvent,
   ReleaseEvent,
+  RollEvent,
   Session,
   SessionComponents,
   SessionCreatedEvent,
@@ -22,6 +25,8 @@ const MIN_ZOOM = 0.2;
 const MAX_ZOOM = 3.0;
 const ZOOM_FACTOR = 1.1;
 const RESPONSE_TIMEOUT = 2000;
+// repli si un Tourtoirac plus ancien n'annonçait pas le délai de relance
+const ROLL_COOLDOWN_SECONDS = 5;
 
 type HandEvent = AcquireEvent | ReleaseEvent;
 
@@ -70,6 +75,13 @@ let boards: Board[] = [];
 let counters: Counter[] = [];
 const countersById = new Map<string, Counter>();
 
+// un dé se lance d'un clic : ni prenable ni déplaçable
+let dices: Dice[] = [];
+const dicesById = new Map<string, Dice>();
+
+// la situation a-t-elle déjà été lue depuis le serveur
+let componentsLoaded = false;
+
 // un spectateur regarde mais ne joue pas : pas de bouton "fixe la position"
 let isWatcher = false;
 
@@ -104,10 +116,53 @@ function loadComponents(components: SessionComponents | undefined): void {
     countersById.set(counter.name, counter);
   }
 
+  dicesById.clear();
+  dices = (components?.dice ?? []).map((item) => {
+    const diceItem = item as DiceItem;
+    return new Dice(
+      diceItem.id,
+      diceItem.x,
+      diceItem.y,
+      diceItem.width,
+      diceItem.height,
+      diceItem.src_list ?? [],
+      diceItem.src,
+    );
+  });
+
+  for (const dice of dices) {
+    dicesById.set(dice.name, dice);
+  }
+
   hand = [];
   handAnchor = null;
   clearPending();
   cameraInitialized = false;
+}
+
+// le dé sous le pointeur, ou null : contrairement aux pions, un dé se lance
+// sans être pris en main
+function hitDiceAt(wx: number, wy: number): Dice | null {
+  for (let i = dices.length - 1; i >= 0; i--) {
+    if (dices[i].contains(wx, wy)) return dices[i];
+  }
+  return null;
+}
+
+function requestRoll(dice: Dice): void {
+  if (dice.isLocked()) return;
+  // verrou local immédiat : le serveur confirme, mais deux clics rapprochés
+  // ne doivent pas partir avant son retour
+  dice.lockFor(ROLL_COOLDOWN_SECONDS);
+  getSocket()?.send({ action: "roll", component_id: dice.name });
+}
+
+// la face tirée par un joueur, appliquée par tous les écrans
+function applyRoll(message: RollEvent): void {
+  const dice = dicesById.get(message.component_id);
+  if (!dice) return;
+  dice.setFace(message.src);
+  dice.lockFor(message.cooldown_seconds ?? ROLL_COOLDOWN_SECONDS);
 }
 
 // le serveur fait autorité sur le rectangle vert
@@ -330,6 +385,13 @@ function onMouseDown(event: MouseEvent): void {
   // l'acquire de son côté, on n'envoie donc même pas la demande. Il peut en
   // revanche déplacer la caméra comme un joueur, pour suivre la partie.
   if (!isWatcher) {
+    // clic sur un dé : il se lance sur place, sans le prendre en main
+    const clickedDice = hitDiceAt(wx, wy);
+    if (clickedDice !== null) {
+      requestRoll(clickedDice);
+      return;
+    }
+
     // clic sur un composant déjà en main : demande de relâchement
     const held = hand.find((counter) => counter.contains(wx, wy));
     if (held !== undefined) {
@@ -439,6 +501,18 @@ function draw(): void {
     }
   }
 
+  for (const dice of dices) {
+    const image = dice.face();
+    if (!image?.complete) continue;
+    ctx.drawImage(image, dice.x, dice.y, dice.width, dice.height);
+    // le dé assombrit pendant son délai : on voit qu'il n'est pas encore
+    // jouable plutôt que de constater qu'un clic a été ignoré
+    if (dice.isLocked()) {
+      ctx.fillStyle = "rgba(0, 0, 0, 0.45)";
+      ctx.fillRect(dice.x, dice.y, dice.width, dice.height);
+    }
+  }
+
   ctx.restore();
 
   // barre d'info (écran) : nom + position du pion
@@ -479,6 +553,8 @@ function handleServerMessage(raw: unknown): void {
       applyHandEvent(answer, isOwnRequest);
     } else if (data.event === "move") {
       applyRemoteMove(data as unknown as MoveEvent);
+    } else if (data.event === "roll") {
+      applyRoll(data as unknown as RollEvent);
     } else if (data.event === "fix_positions") {
       applyFixPositions(data as unknown as FixPositionsEvent);
     } else if (data.event === "session_created" || data.event === "session_joined") {
@@ -527,8 +603,11 @@ function handleSessionEvent(data: GameServerMessage): void {
   storeSession(session);
   updateSessionInfo();
 
-  // la situation initiale n'est chargée qu'une seule fois
-  if (counters.length === 0) {
+  // la situation initiale n'est chargée qu'une seule fois. Le test sur
+  // counters ne suffisait plus : une partie sans pion le relisait à chaque
+  // message de session et remettait les dés à zéro
+  if (!componentsLoaded) {
+    componentsLoaded = true;
     loadComponents(session.components);
   }
 }
@@ -545,6 +624,9 @@ if (backLink) {
 }
 
 loadComponents(currentSession?.components);
+// une session déjà connue est resynchronisée par le resume_session, pas par un
+// nouveau chargement de la situation
+componentsLoaded = currentSession?.key !== undefined;
 
 const socket = getSocket();
 if (socket) {

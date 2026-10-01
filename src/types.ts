@@ -26,9 +26,24 @@ export interface TokenItem {
   border?: boolean;
 }
 
+export interface DiceItem {
+  kind: "dice";
+  id: string;
+  x: number;
+  y: number;
+  width: number;
+  height: number;
+  /** face actuellement affichée */
+  src: string;
+  /** toutes les faces, préchargées par le client */
+  src_list: string[];
+}
+
 export interface SessionComponents {
   fixed: BoardItem[];
   movable: TokenItem[];
+  // absent d'un Tourtoirac plus ancien : le dé est donc facultatif
+  dice?: DiceItem[];
 }
 
 export interface Session {
@@ -117,4 +132,14 @@ export interface MoveEvent {
   component_id: string;
   // Tourtoirac imbrique la position sous "coordinates"
   coordinates: ComponentState;
+}
+
+// face tirée par un joueur, diffusée à toute la session
+export interface RollEvent {
+  event: "roll";
+  component_id: string;
+  /** image de la face tirée */
+  src: string;
+  /** délai avant le prochain lancer, en secondes */
+  cooldown_seconds: number;
 }
