@@ -16,6 +16,7 @@ import type {
   ReleaseEvent,
   RollEvent,
   RotateEvent,
+  ServerErrorEvent,
   Session,
   SessionComponents,
   SessionCreatedEvent,
@@ -59,13 +60,24 @@ fitCanvasSize();
 
 let currentSession: Session | null = loadSession();
 
+// seul le créateur de la partie peut l'archiver. Le serveur l'annonce dans
+// l'événement de session, l'interface ne fait que le refléter.
+let isOwner = false;
+
+// la partie a été close par son owner : elle est archivée, plus rien n'y bouge
+let isClosed = false;
+
 const sessionInfo = document.getElementById("session-info");
 
 function updateSessionInfo(): void {
   if (!sessionInfo) return;
-  sessionInfo.textContent = currentSession?.key
-    ? `Session ${currentSession.key}`
-    : "Aucune session active";
+  if (!currentSession?.key) {
+    sessionInfo.textContent = "Aucune session active";
+  } else if (isClosed) {
+    sessionInfo.textContent = `Session ${currentSession.key} (partie close)`;
+  } else {
+    sessionInfo.textContent = `Session ${currentSession.key}`;
+  }
 }
 
 updateSessionInfo();
@@ -613,12 +625,42 @@ function handleServerMessage(raw: unknown): void {
       applyRotate(data as unknown as RotateEvent);
     } else if (data.event === "fix_positions") {
       applyFixPositions(data as unknown as FixPositionsEvent);
+    } else if (data.event === "session_closed") {
+      applySessionClosed();
+      // l'owner qui vient de cliquer part sur le lobby, les autres restent
+      // sur la partie close
+      if (pendingClose) {
+        pendingClose = false;
+        window.location.href = leaveUrl;
+      }
+    } else if (data.event === "error") {
+      reportServerError(data as unknown as ServerErrorEvent);
     } else if (data.event === "session_created" || data.event === "session_joined") {
       handleSessionEvent(data);
     }
   } catch (e) {
     console.error("Erreur traitement message:", e);
   }
+}
+
+// Une partie close n'existe plus côté back-end : seuls ces refusent
+// Justifient d'une fenêtre, les autres erreurs restent dans la console comme
+// le fait déjà le reste de la page.
+const CLOSE_ERRORS = [
+  "not_session_owner",
+  "session_closed",
+  "session_state_not_stored",
+  "session_not_archived",
+];
+
+function reportServerError(data: ServerErrorEvent): void {
+  const code = data.error?.code;
+  console.warn("[WS] Erreur du serveur :", code, data.error?.message);
+  if (!code || !CLOSE_ERRORS.includes(code)) return;
+
+  // la partie n'est pas close : on ne part pas sur le lobby
+  pendingClose = false;
+  window.alert(data.error?.message ?? "La partie n'a pas pu être close.");
 }
 
 // Un composant en mouvement chez un autre joueur :
@@ -651,9 +693,12 @@ function handleSessionEvent(data: GameServerMessage): void {
   if (!session?.key) return;
   if (currentSession && session.key !== currentSession.key) return;
 
-  // le serveur fait foi : c'est lui qui dit si l'on joue ou si l'on regarde
+  // le serveur fait foi : c'est lui qui dit si l'on joue ou si l'on regarde,
+  // et si l'on a le droit de clore la partie
   const event = data as unknown as SessionCreatedEvent;
   if (event.role) isWatcher = event.role === "watcher";
+  if (typeof event.owner === "boolean") isOwner = event.owner;
+  updateLeaveLinks();
 
   currentSession = session;
   storeSession(session);
@@ -668,15 +713,72 @@ function handleSessionEvent(data: GameServerMessage): void {
   }
 }
 
+// La partie a été archivée par son owner. Les joueurs restants deviennent des
+// spectateurs : le jeu reste affiché, figé, et seul l'owner qui a cliqué repart.
+function applySessionClosed(): void {
+  isClosed = true;
+  isWatcher = true;
+  isOwner = false;
+  // une requête en vol attendait une réponse qui ne viendra plus
+  clearPending();
+  updateLeaveLinks();
+  updateSessionInfo();
+}
+
 // -------------------------------------------------
 // Initialisation
 // -------------------------------------------------
 
 // le lien de retour ramène sur l'onglet du jeu d'origine ; repli index.html
 // si la page a été ouverte sans paramètre (lien direct, marque-page)
+const leaveUrl = lobbyReturnUrl(originGameName());
 const backLink = document.getElementById("back-link") as HTMLAnchorElement | null;
 if (backLink) {
-  backLink.href = lobbyReturnUrl(originGameName());
+  backLink.href = leaveUrl;
+}
+
+// Le second lien n'existe que pour l'owner : le serveur le dit dans l'événement
+// de session, cette page se contente de le montrer ou de le cacher.
+const closeLink = document.getElementById("close-link") as HTMLAnchorElement | null;
+if (closeLink) {
+  closeLink.href = leaveUrl;
+}
+
+function updateLeaveLinks(): void {
+  if (!closeLink) return;
+  closeLink.hidden = !isOwner || isClosed;
+}
+
+// l'owner a-t-il demandé la clôture ? c'est lui, et lui seul, qui part sur le
+// lobby une fois la partie archivée
+let pendingClose = false;
+
+function onCloseSession(event: MouseEvent): void {
+  // le lien reste une ancre de secours si le serveur ne répond jamais
+  event.preventDefault();
+
+  if (!window.confirm(
+    "Clore la partie ?\n\n" +
+      "Elle sera archivée et ne pourra plus être rejouée. " +
+      "Les joueurs encore connectés regarderont la partie telle qu'elle est.",
+  )) {
+    return;
+  }
+
+  const socket = getSocket();
+  if (!socket) {
+    window.alert("Connexion au serveur impossible : la partie reste ouverte.");
+    return;
+  }
+
+  pendingClose = true;
+  socket.send({ action: "close_session" });
+  console.log("[WS] Envoyé :", JSON.stringify({ action: "close_session" }));
+}
+
+if (closeLink) {
+  closeLink.hidden = true;
+  closeLink.addEventListener("click", onCloseSession);
 }
 
 loadComponents(currentSession?.components);

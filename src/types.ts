@@ -97,6 +97,20 @@ export interface SessionCreatedEvent {
   session?: Session;
   // rôle de ce client dans la session : seuls les joueurs peuvent agir
   role?: "player" | "watcher";
+  // ce client a-t-il créé la partie ? seul l'owner peut la clore. Le serveur
+  // en est seul juge : le client ne fait que lire la réponse
+  owner?: boolean;
+}
+
+// la partie a été archivée : plus rien n'y bouge, tout le monde regarde
+export interface SessionClosedEvent {
+  event: "session_closed";
+}
+
+// refus du serveur, always reported with a stable code the client can test
+export interface ServerErrorEvent {
+  event?: "error";
+  error?: { code?: string; message?: string };
 }
 
 // accusé d'acquisition / de relâchement, diffusé à tous les joueurs de la session

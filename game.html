@@ -39,6 +39,15 @@
       color: #ffd700;
       text-decoration: none;
     }
+    .back-links {
+      display: flex;
+      gap: 16px;
+      align-items: baseline;
+    }
+    /* la clôture est définitive : elle vide le code de la partie */
+    a.back.danger {
+      color: #ff8a80;
+    }
     #game-wrapper {
       flex: 1;
       min-height: 0;
@@ -60,7 +69,11 @@
   <header id="game-header">
     <span class="game-title">Online Boardgames</span>
     <span class="session-info" id="session-info"></span>
-    <a class="back" id="back-link" href="index.html">&larr; Quitter</a>
+    <span class="back-links">
+      <a class="back" id="back-link" href="index.html">&larr; Quitter et reprendre plus tard</a>
+      <!-- visible pour l'owner seul : le serveur le décide, pas cette page -->
+      <a class="back danger" id="close-link" href="index.html" hidden>Clore la partie et quitter</a>
+    </span>
   </header>
 
   <div id="game-wrapper">
