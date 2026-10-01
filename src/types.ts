@@ -59,6 +59,8 @@ export interface ActiveSession {
   players?: SessionPlayer[];
   max_players?: number;
   max_watchers?: number;
+  /** le créateur a-t-il laissé cette partie ouverte aux spectateurs */
+  allows_watchers?: boolean;
 }
 
 export interface SessionsInfoEvent {

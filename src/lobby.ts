@@ -12,6 +12,10 @@ import type {
 import { getSocket } from "./ws/wsClient";
 import type { SocketStateMessage } from "./ws/wsClient";
 
+interface ServerErrorEvent {
+  error?: { code?: string; message?: string };
+}
+
 interface ServerMessage {
   event: string;
   content?: { active?: Record<string, ActiveSession[]> };
@@ -108,6 +112,16 @@ function pushStatus(text: string): void {
 // messages reçus mais non journalisés (poll technique du serveur)
 const SILENT_EVENTS = new Set(["keep_alive"]);
 
+// refus d'adhésion qui méritent de rendre la modale : une saisie à corriger,
+// ou une raison que seul le serveur connaît (spectateurs non autorisés, trop de
+// spectateurs, partie pleine)
+const REFUSAL_CODES = new Set([
+  "access_key_incorrect",
+  "session_unavailable",
+  "watchers_not_allowed",
+  "watchers_full",
+]);
+
 // un message peut être volumineux (session_created transporte tous les
 // composants du plateau) : on tronque pour garder le cartouche lisible,
 // un clic sur la ligne déplie le JSON complet
@@ -169,6 +183,13 @@ function handleServerMessage(data: ServerMessage): void {
     } else if (data.event === "session_created" || data.event === "session_joined") {
       // message de session reçu après create_session ou join_session
       handleSessionCreated(data as unknown as SessionCreatedEvent);
+    } else if (data.event === "error") {
+      const code = (data as unknown as ServerErrorEvent).error?.code;
+      // le serveur a refuse l'adhesion : on rend la modale pour corriger
+      if (code && REFUSAL_CODES.has(code)) {
+        reopenJoinModalAfterRefusal(code);
+        lastJoinAttempt = null;
+      }
     } else if (data.event === "session_players_changed") {
       // un joueur est entré ou sorti : on redemande la liste pour rafraîchir
       refreshSessions();
@@ -197,6 +218,7 @@ function handleSessionCreated(data: SessionCreatedEvent): void {
   if (session?.key) {
     storeSession(session);
   }
+  lastJoinAttempt = null;
   window.location.href = gameEntryUrl(openingGameName ?? activeGameName());
 }
 
@@ -304,7 +326,12 @@ function confirmCreateSession(): void {
 // Modale d'adhésion
 // -------------------------------------------------
 
-let pendingJoin: { sessionCode: string; nickname: string; gameName: string } | null = null;
+let pendingJoin: {
+  sessionCode: string;
+  nickname: string;
+  gameName: string;
+  role: "player" | "watcher";
+} | null = null;
 
 function isSessionFull(session: ActiveSession): boolean {
   const max = session.max_players;
@@ -312,20 +339,41 @@ function isSessionFull(session: ActiveSession): boolean {
   return (session.players?.length ?? 0) >= max;
 }
 
-// le jeu est mémorisé dès l'ouverture de la modale : l'onglet peut changer
-// avant la réponse du serveur
-function openJoinModal(sessionCode: string, nickname: string, gameName: string): void {
-  pendingJoin = { sessionCode, nickname, gameName };
+// le jeu et le role sont mémorisés dès l'ouverture de la modale : l'onglet peut
+// changer avant la réponse du serveur
+function openJoinModal(
+  sessionCode: string,
+  nickname: string,
+  gameName: string,
+  role: "player" | "watcher" = "player",
+): void {
+  const isWatcher = role === "watcher";
+  pendingJoin = { sessionCode, nickname, gameName, role };
   const nicknameInput = document.getElementById("join-nickname") as HTMLInputElement;
   nicknameInput.value = nickname;
-  // un pseudo fourni reste verrouillé, sinon le joueur le saisit
+  // un pseudo fourni reste verrouillé, sinon l'utilisateur le saisit
   nicknameInput.readOnly = nickname !== "";
   (document.getElementById("join-key") as HTMLInputElement).value = "";
+  (document.getElementById("join-access-key") as HTMLInputElement).value = "";
   hideError("join-nickname-error");
   hideError("join-key-error");
-  hideError("join-key-error");
+  hideError("join-access-key-error");
+  hideError("join-role-error");
+  // un spectateur n'a pas de key : le champ disparaît du formulaire plutôt que
+  // d'être laissé vide, il n'aurait rien à saisir
+  (document.getElementById("join-key-field") as HTMLDivElement).style.display = isWatcher
+    ? "none"
+    : "block";
+  (document.getElementById("join-modal-title") as HTMLHeadingElement).textContent =
+    isWatcher ? "Regarder une session" : "Rejoindre une session";
+  (document.getElementById("join-confirm") as HTMLButtonElement).textContent =
+    isWatcher ? "Regarder" : "Rejoindre";
   document.getElementById("join-modal")!.classList.add("show");
-  document.getElementById("join-key")!.focus();
+  if (isWatcher) {
+    nicknameInput.focus();
+  } else {
+    (document.getElementById("join-key") as HTMLInputElement).focus();
+  }
 }
 
 function closeJoinModal(): void {
@@ -333,8 +381,55 @@ function closeJoinModal(): void {
   pendingJoin = null;
 }
 
+// ce que le joueur a soumis, conserve apres fermeture de la modale : si le
+// serveur refuse l'adhesion, on lui rouvre la modale avec sa saisie intacte
+// plutot que de lui faire tout retaper
+let lastJoinAttempt: {
+  sessionCode: string;
+  gameName: string;
+  role: "player" | "watcher";
+  nickname: string;
+  key: string;
+  accessKey: string;
+} | null = null;
+
+function reopenJoinModalAfterRefusal(code: string): void {
+  if (!lastJoinAttempt) return;
+  const attempt = lastJoinAttempt;
+  openJoinModal(attempt.sessionCode, attempt.nickname, attempt.gameName, attempt.role);
+  (document.getElementById("join-key") as HTMLInputElement).value = attempt.key;
+  (document.getElementById("join-access-key") as HTMLInputElement).value = attempt.accessKey;
+  // le message va sous le champ fautif quand il y en a un : une clé d'accès
+  // refusée est une erreur de saisie, une partie pleine ne l'est pas
+  switch (code) {
+    case "access_key_incorrect":
+      showError("join-access-key-error");
+      break;
+    case "watchers_not_allowed":
+      (document.getElementById("join-role-error") as HTMLDivElement).textContent =
+        "Cette partie n'accepte pas les spectateurs.";
+      showError("join-role-error");
+      break;
+    case "watchers_full":
+      (document.getElementById("join-role-error") as HTMLDivElement).textContent =
+        "Cette partie a déjà trop de spectateurs.";
+      showError("join-role-error");
+      break;
+    default:
+      if (attempt.role === "watcher") {
+        // un spectateur n'a pas de key à corriger : le refus vient du serveur
+        (document.getElementById("join-role-error") as HTMLDivElement).textContent =
+          "Le serveur a refusé cette adhésion.";
+        showError("join-role-error");
+      } else {
+        showError("join-key-error");
+      }
+  }
+}
+
 function confirmJoinSession(): void {
   if (!pendingJoin) return;
+  const isWatcher = pendingJoin.role === "watcher";
   const nickname = (document.getElementById("join-nickname") as HTMLInputElement).value.trim();
   const key = (document.getElementById("join-key") as HTMLInputElement).value.trim();
 
@@ -344,21 +439,39 @@ function confirmJoinSession(): void {
   }
   hideError("join-nickname-error");
 
-  if (!key) {
+  // la key identifie un joueur : un spectateur n'en fournit pas
+  if (!isWatcher && !key) {
     showError("join-key-error");
     return;
   }
   hideError("join-key-error");
 
+  // l'access_key n'est obligatoire que si le créateur en a défini une : elle est
+  // transmise telle quelle, le serveur tranche
+  const accessKey =
+    (document.getElementById("join-access-key") as HTMLInputElement).value.trim();
+
   openingGameName = pendingJoin.gameName;
-  getSocket()?.send({
+  lastJoinAttempt = {
+    sessionCode: pendingJoin.sessionCode,
+    gameName: pendingJoin.gameName,
+    role: pendingJoin.role,
+    nickname,
+    key,
+    accessKey,
+  };
+  const joinMessage: Record<string, unknown> = {
     action: "join_session",
     session_code: pendingJoin.sessionCode,
     nickname,
-    key,
-    role: "player",
-  });
-  storePlayerIdentity(nickname, "player");
+    access_key: accessKey,
+    role: pendingJoin.role,
+  };
+  // le champ n'est pas envoyé pour un spectateur : le serveur n'a pas à le
+  // attendre, et une key vide pourrait être prise pour une key saisie
+  if (!isWatcher) joinMessage.key = key;
+  getSocket()?.send(joinMessage);
+  storePlayerIdentity(nickname, pendingJoin.role);
   closeJoinModal();
 }
 
@@ -461,10 +574,15 @@ function renderAll(): void {
           actionCell.appendChild(joinBtn);
         }
 
-        const watchBtn = document.createElement("button");
-        watchBtn.className = "watch-session-btn";
-        watchBtn.textContent = "Spectateur";
-        actionCell.appendChild(watchBtn);
+        // un spectateur suit la partie sans y jouer : meme adhésion, meme
+        // access_key, pas de key, et il ne compte pas dans la limite de joueurs
+        if (session.allows_watchers !== false) {
+          const watchBtn = document.createElement("button");
+          watchBtn.className = "watch-session-btn";
+          watchBtn.textContent = "Spectateur";
+          watchBtn.onclick = () => openJoinModal(session.code ?? "", "", name, "watcher");
+          actionCell.appendChild(watchBtn);
+        }
 
         row.appendChild(codeCell);
         row.appendChild(playersCell);

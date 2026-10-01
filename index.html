@@ -417,15 +417,23 @@
   <div id="join-modal" class="modal-overlay">
     <div class="modal-form">
       <button class="modal-close" id="join-modal-close" type="button" aria-label="Fermer">&times;</button>
-      <h3>Rejoindre une session</h3>
+      <h3 id="join-modal-title">Rejoindre une session</h3>
 
       <label for="join-nickname">Nickname</label>
       <input type="text" id="join-nickname" readonly />
       <div id="join-nickname-error" class="error-msg">Le nickname est obligatoire.</div>
 
-      <label for="join-key">Key</label>
-      <input type="text" id="join-key" placeholder="Clé de session" />
-      <div id="join-key-error" class="error-msg">La clé est obligatoire.</div>
+      <div id="join-key-field">
+        <label for="join-key">Key</label>
+        <input type="text" id="join-key" placeholder="Clé de session" />
+        <div id="join-key-error" class="error-msg">La clé est obligatoire.</div>
+      </div>
+
+      <label for="join-access-key">Clé d'accès au jeu</label>
+      <input type="text" id="join-access-key" placeholder="Demandée si le créateur en a défini une" />
+      <div id="join-access-key-error" class="error-msg">Clé d'accès refusée par le serveur.</div>
+
+      <div id="join-role-error" class="error-msg">Le serveur a refusé cette adhésion.</div>
 
       <div class="form-buttons">
         <button class="btn-cancel" id="join-cancel">Annuler</button>

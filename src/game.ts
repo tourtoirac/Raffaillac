@@ -326,22 +326,27 @@ function onMouseDown(event: MouseEvent): void {
   // une requête est déjà en attente de réponse du serveur
   if (pending !== null) return;
 
-  // clic sur un composant déjà en main : demande de relâchement
-  const held = hand.find((counter) => counter.contains(wx, wy));
-  if (held !== undefined) {
-    requestRelease(held);
-    return;
-  }
+  // un spectateur regarde : il ne prend aucun pion en main. Le serveur refuse
+  // l'acquire de son côté, on n'envoie donc même pas la demande. Il peut en
+  // revanche déplacer la caméra comme un joueur, pour suivre la partie.
+  if (!isWatcher) {
+    // clic sur un composant déjà en main : demande de relâchement
+    const held = hand.find((counter) => counter.contains(wx, wy));
+    if (held !== undefined) {
+      requestRelease(held);
+      return;
+    }
 
-  // clic sur un pion : demande d'acquisition
-  const hit = hitCounter(wx, wy);
-  if (hit !== null) {
-    requestAcquire(hit);
-    return;
-  }
+    // clic sur un pion : demande d'acquisition
+    const hit = hitCounter(wx, wy);
+    if (hit !== null) {
+      requestAcquire(hit);
+      return;
+    }
 
-  // la main occupe déjà le pion : pas de déplacement de la caméra
-  if (hand.length > 0) return;
+    // la main occupe déjà le pion : pas de déplacement de la caméra
+    if (hand.length > 0) return;
+  }
 
   panning = true;
   lastMouseX = sx;
