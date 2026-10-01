@@ -439,11 +439,8 @@ function confirmJoinSession(): void {
   }
   hideError("join-nickname-error");
 
-  // la key identifie un joueur : un spectateur n'en fournit pas
-  if (!isWatcher && !key) {
-    showError("join-key-error");
-    return;
-  }
+  // la clé d'utilisateur est facultative : sans elle, le serveur ouvre un
+  // nouveau siège pour ce pseudo. Elle ne sert qu'à retrouver sa place ensuite.
   hideError("join-key-error");
 
   // l'access_key n'est obligatoire que si le créateur en a défini une : elle est
