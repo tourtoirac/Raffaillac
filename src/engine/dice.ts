@@ -2,6 +2,10 @@
  * Un dé : une image par face, positionnée dans la table comme un pion mais
  * ni déplaçable ni prenable. Un clic lance le dé, et le serveur diffuse la
  * face tirée à toute la session.
+ *
+ * Le délai entre deux lancés vient du jeu (roll_delay dans le game_json) ; le
+ * serveur le confirme à chaque lancer. Le client s'en sert dès le premier clic
+ * pour verrouiller le dé tout de suite, sans attendre la réponse.
  */
 export class Dice {
   readonly name: string;
@@ -9,6 +13,8 @@ export class Dice {
   readonly height: number;
   /** toutes les faces, préchargées : changer de face ne clignote pas */
   readonly faces: Map<string, HTMLImageElement>;
+  /** délai annoncé par le serveur, en secondes */
+  readonly rollDelay: number;
 
   x: number;
   y: number;
@@ -25,12 +31,14 @@ export class Dice {
     height: number,
     srcList: string[],
     src: string,
+    rollDelay = 5,
   ) {
     this.name = name;
     this.x = x;
     this.y = y;
     this.width = width;
     this.height = height;
+    this.rollDelay = rollDelay;
 
     this.faces = new Map();
     for (const face of srcList) {

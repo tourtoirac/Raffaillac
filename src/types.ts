@@ -37,6 +37,8 @@ export interface DiceItem {
   src: string;
   /** toutes les faces, préchargées par le client */
   src_list: string[];
+  /** délai avant le prochain lancer, en secondes, propre au jeu */
+  roll_delay?: number;
 }
 
 export interface SessionComponents {

@@ -25,7 +25,8 @@ const MIN_ZOOM = 0.2;
 const MAX_ZOOM = 3.0;
 const ZOOM_FACTOR = 1.1;
 const RESPONSE_TIMEOUT = 2000;
-// repli si un Tourtoirac plus ancien n'annonçait pas le délai de relance
+// repli si le jeu ne dit rien dans son game_json, ou si un Tourtoirac plus
+// ancien n'annonçait pas le délai dans l'événement de lancer
 const ROLL_COOLDOWN_SECONDS = 5;
 
 type HandEvent = AcquireEvent | ReleaseEvent;
@@ -127,6 +128,7 @@ function loadComponents(components: SessionComponents | undefined): void {
       diceItem.height,
       diceItem.src_list ?? [],
       diceItem.src,
+      diceItem.roll_delay ?? ROLL_COOLDOWN_SECONDS,
     );
   });
 
@@ -151,9 +153,9 @@ function hitDiceAt(wx: number, wy: number): Dice | null {
 
 function requestRoll(dice: Dice): void {
   if (dice.isLocked()) return;
-  // verrou local immédiat : le serveur confirme, mais deux clics rapprochés
-  // ne doivent pas partir avant son retour
-  dice.lockFor(ROLL_COOLDOWN_SECONDS);
+  // verrou local immédiat, pour la durée annoncée par le jeu : deux clics
+  // rapprochés ne doivent pas partir avant le retour du serveur
+  dice.lockFor(dice.rollDelay);
   getSocket()?.send({ action: "roll", component_id: dice.name });
 }
 
@@ -162,7 +164,8 @@ function applyRoll(message: RollEvent): void {
   const dice = dicesById.get(message.component_id);
   if (!dice) return;
   dice.setFace(message.src);
-  dice.lockFor(message.cooldown_seconds ?? ROLL_COOLDOWN_SECONDS);
+  // le serveur fait foi : sa durée remplace celle qu'on s'était appliquée
+  dice.lockFor(message.cooldown_seconds ?? dice.rollDelay);
 }
 
 // le serveur fait autorité sur le rectangle vert
