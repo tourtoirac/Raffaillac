@@ -17,6 +17,10 @@ export interface TokenItem {
   kind: "token";
   id: string;
   front_src: string;
+  /** face de dos : absente ou nulle sur un pion qui ne se retourne pas */
+  back_src?: string | null;
+  /** face affichée, telle que le serveur l'a rendue */
+  side?: "front" | "back";
   x: number;
   y: number;
   width: number;
@@ -170,4 +174,14 @@ export interface RotateEvent {
   component_id: string;
   /** nouvel angle, en degrés vers la droite, ramené dans [0, 360) */
   orientation: number;
+}
+
+// un joueur a retourné un pion, diffusé à toute la session
+export interface FlipEvent {
+  event: "flip";
+  component_id: string;
+  /** face désormais affichée */
+  side: "front" | "back";
+  front_src: string;
+  back_src: string;
 }

@@ -1,11 +1,27 @@
 /** part de la largeur et de la hauteur du pion que occupe chaque zone */
 export const ROTATION_ZONE_RATIO = 0.2;
 
+// Ombre portée sous un pion : décalée vers le bas à droite, elle donne au
+// compteur son épaisseur. Les valeurs sont en pixels du monde, comme la taille
+// d'un pion : l'ombre grandit avec lui quand on zoome.
+const SHADOW_COLOR = "rgba(0, 0, 0, 0.55)";
+const SHADOW_BLUR = 4;
+const SHADOW_OFFSET = 5;
+
 export type RotationDirection = "left" | "right";
+
+export type CounterSide = "front" | "back";
 
 export class Counter {
   readonly name: string;
-  readonly image: HTMLImageElement;
+  /** image de la face avant */
+  readonly frontImage: HTMLImageElement;
+  /**
+   * image de la face arrière, absente sur un pion qui ne se retourne pas.
+   * Les deux images sont chargées d'emblée : retourner un pion ne doit pas
+   * faire clignoter une image pas encore téléchargée.
+   */
+  readonly backImage: HTMLImageElement | null;
   readonly width: number;
   readonly height: number;
   readonly moveBorder: boolean;
@@ -21,10 +37,12 @@ export class Counter {
   orientable: boolean;
   /** angle courant, en degrés vers la droite */
   orientation: number;
+  /** face affichée : le serveur en est seul juge */
+  side: CounterSide;
 
   constructor(
     name: string,
-    image: HTMLImageElement,
+    frontImage: HTMLImageElement,
     x: number,
     y: number,
     width = 40,
@@ -33,9 +51,12 @@ export class Counter {
     shadow = false,
     orientable = false,
     orientation = 0,
+    backImage: HTMLImageElement | null = null,
+    side: CounterSide = "front",
   ) {
     this.name = name;
-    this.image = image;
+    this.frontImage = frontImage;
+    this.backImage = backImage;
     this.x = x;
     this.y = y;
     this.width = width;
@@ -47,6 +68,27 @@ export class Counter {
     this.heldBy = null;
     this.orientable = orientable;
     this.orientation = orientation;
+    // un pion sans dos n'a qu'une face : le serveur ne peut pas le renvoyer
+    // sur la face arrière, et une session reprise commence sur la face avant
+    this.side = side === "back" && backImage !== null ? "back" : "front";
+  }
+
+  /** l'image de la face affichée, celle que le dessin utilise */
+  get image(): HTMLImageElement {
+    return this.side === "back" && this.backImage !== null ? this.backImage : this.frontImage;
+  }
+
+  /** ce pion a-t-il une seconde face ? */
+  get flippable(): boolean {
+    return this.backImage !== null;
+  }
+
+  /**
+   * Affiche la face que le serveur vient de désigner. Une face arrière sans
+   * image reste la face avant : le client ne montre jamais une image absente.
+   */
+  setSide(side: CounterSide): void {
+    this.side = side === "back" && this.backImage !== null ? "back" : "front";
   }
 
   /** le centre du pion, point autour duquel il tourne */
@@ -105,7 +147,26 @@ export class Counter {
   }
 
   private drawUpright(ctx: CanvasRenderingContext2D): void {
+    // L'ombre portée passe par le dessin lui-même : le contexte la peint
+    // derrière l'image, ce qui évite un second dessin de la même image. Elle
+    // accompagne le rectangle vert sans le remplacer : un pion posé chez lui a
+    // les deux.
+    const castsShadow = this.shadow || this.border;
+    if (castsShadow) {
+      ctx.shadowColor = SHADOW_COLOR;
+      ctx.shadowBlur = SHADOW_BLUR;
+      ctx.shadowOffsetX = SHADOW_OFFSET;
+      ctx.shadowOffsetY = SHADOW_OFFSET;
+    }
+
     ctx.drawImage(this.image, this.x, this.y, this.width, this.height);
+
+    if (castsShadow) {
+      ctx.shadowColor = "rgba(0, 0, 0, 0)";
+      ctx.shadowBlur = 0;
+      ctx.shadowOffsetX = 0;
+      ctx.shadowOffsetY = 0;
+    }
 
     if (this.held) {
       ctx.lineWidth = 5;
@@ -117,18 +178,6 @@ export class Counter {
       ctx.lineWidth = 5;
       ctx.strokeStyle = "green";
       ctx.strokeRect(this.x, this.y, this.width, this.height);
-    } else if (this.shadow) {
-      ctx.shadowColor = "rgba(0, 0, 0, 0.7)";
-      ctx.shadowBlur = 3;
-      ctx.shadowOffsetX = 3;
-      ctx.shadowOffsetY = 3;
-
-      ctx.drawImage(this.image, this.x, this.y, this.width, this.height);
-
-      ctx.shadowColor = "rgba(0, 0, 0, 0)";
-      ctx.shadowBlur = 0;
-      ctx.shadowOffsetX = 0;
-      ctx.shadowOffsetY = 0;
     }
   }
 

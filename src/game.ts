@@ -12,6 +12,7 @@ import type {
   ComponentState,
   DiceItem,
   FixPositionsEvent,
+  FlipEvent,
   MoveEvent,
   ReleaseEvent,
   RollEvent,
@@ -112,6 +113,13 @@ function loadComponents(components: SessionComponents | undefined): void {
       const token = item as TokenItem;
       const img = new Image();
       img.src = token.front_src;
+      // la face de dos est chargée tout de suite quand le jeu en donne une :
+      // un pion sans back_src ne se retourne pas, et n'a rien à précharger
+      let backImg: HTMLImageElement | null = null;
+      if (token.back_src) {
+        backImg = new Image();
+        backImg.src = token.back_src;
+      }
       const counter = new Counter(
         token.id,
         img,
@@ -125,6 +133,9 @@ function loadComponents(components: SessionComponents | undefined): void {
         token.orientable ?? false,
         // l'angle atteint avant une sauvegarde de session, s'il y en a une
         token.orientation ?? 0,
+        backImg,
+        // la face affichée quand la partie a été sauvegardée en cours de jeu
+        token.side ?? "front",
       );
       // l'état du rectangle vient du serveur
       if (typeof token.border === "boolean") counter.border = token.border;
@@ -384,6 +395,29 @@ function applyRotate(message: RotateEvent): void {
   counter.orientation = message.orientation;
 }
 
+function requestFlip(counter: Counter): void {
+  const socket = getSocket();
+  if (!socket) return;
+
+  // un pion qui n'a qu'une seule face ne se retourne pas, et on ne le demande
+  // même pas au serveur : le double-clic doit rester sans effet
+  if (!counter.flippable) return;
+
+  // pas de retournement optimiste : on attend la face que le serveur renvoie,
+  // comme pour la rotation. Sinon l'écran qui a cliqué montrerait un pion que
+  // les autres ne voient pas encore
+  const message = { action: "flip", component_id: counter.name };
+  socket.send(message);
+  console.log("[WS] Envoyé :", JSON.stringify(message));
+}
+
+// le pion s'est retourné : appliqué par tous les écrans, comme la rotation
+function applyFlip(message: FlipEvent): void {
+  const counter = countersById.get(message.component_id);
+  if (!counter) return;
+  counter.setSide(message.side);
+}
+
 function requestAcquire(counter: Counter): void {
   const socket = getSocket();
   if (!socket) return;
@@ -510,6 +544,26 @@ function onMouseUp(): void {
   panning = false;
 }
 
+/**
+ * Le double-clic retourne le pion sous le pointeur. Le simple-clic, lui, le
+ * prend en main : les deux gestes se cumulent, comme dans le Vietnam d'avant,
+ * où un double-clic attrapait le compteur et le retournait en même temps.
+ */
+function onDoubleClick(event: MouseEvent): void {
+  // un spectateur regarde : il ne retourne rien. Le serveur refuse de son côté,
+  // le double-clic n'a donc rien à lui demander.
+  if (isWatcher) return;
+
+  const [wx, wy] = screenToWorld(event.offsetX, event.offsetY);
+  // un pion en main a quitté sa case : c'est lui que le pointeur vise, pas ce
+  // qui se trouve dessous
+  const held = hand.find((counter) => counter.contains(wx, wy));
+  const hit = held ?? hitCounter(wx, wy);
+  if (hit === null) return;
+
+  requestFlip(hit);
+}
+
 function onMouseWheel(event: WheelEvent): void {
   event.preventDefault();
 
@@ -623,6 +677,8 @@ function handleServerMessage(raw: unknown): void {
       applyRoll(data as unknown as RollEvent);
     } else if (data.event === "rotate") {
       applyRotate(data as unknown as RotateEvent);
+    } else if (data.event === "flip") {
+      applyFlip(data as unknown as FlipEvent);
     } else if (data.event === "fix_positions") {
       applyFixPositions(data as unknown as FixPositionsEvent);
     } else if (data.event === "session_closed") {
@@ -828,6 +884,7 @@ window.requestAnimationFrame(gameLoop);
 new ResizeObserver(fitCanvasSize).observe(canvas);
 
 canvas.addEventListener("mousedown", onMouseDown);
+canvas.addEventListener("dblclick", onDoubleClick);
 canvas.addEventListener("mousemove", onMouseMove);
 canvas.addEventListener("mouseup", onMouseUp);
 canvas.addEventListener("mouseleave", onMouseUp);
