@@ -8,6 +8,10 @@ const SHADOW_COLOR = "rgba(0, 0, 0, 0.55)";
 const SHADOW_BLUR = 4;
 const SHADOW_OFFSET = 5;
 
+// Opacité du pion fantôme posé sur la case de départ d'un pion "transparent".
+// Assez pâle pour se distinguer du pion réel, assez visible pour servir de cible.
+const ORIGIN_GHOST_ALPHA = 0.5;
+
 export type RotationDirection = "left" | "right";
 
 export type CounterSide = "front" | "back";
@@ -26,9 +30,17 @@ export class Counter {
   readonly height: number;
   readonly moveBorder: boolean;
   readonly shadow: boolean;
+  /**
+   * "transparent" quand le jeu demande d'afficher le pion en transparence sur
+   * sa case de départ ; null sur un pion ordinaire
+   */
+  readonly origin: string | null;
 
   x: number;
   y: number;
+  /** case de départ, où revient un pion "transparent" qu'on dépose dessus */
+  initialX: number;
+  initialY: number;
   /** rectangle vert : piloté par le serveur, valable pour tous */
   border: boolean;
   held: boolean;
@@ -53,6 +65,9 @@ export class Counter {
     orientation = 0,
     backImage: HTMLImageElement | null = null,
     side: CounterSide = "front",
+    origin: string | null = null,
+    initialX = x,
+    initialY = y,
   ) {
     this.name = name;
     this.frontImage = frontImage;
@@ -63,6 +78,9 @@ export class Counter {
     this.height = height;
     this.moveBorder = moveBorder;
     this.shadow = shadow;
+    this.origin = origin;
+    this.initialX = initialX;
+    this.initialY = initialY;
     this.border = moveBorder;
     this.held = false;
     this.heldBy = null;
@@ -81,6 +99,11 @@ export class Counter {
   /** ce pion a-t-il une seconde face ? */
   get flippable(): boolean {
     return this.backImage !== null;
+  }
+
+  /** le jeu demande-t-il un pion fantôme sur la case de départ ? */
+  get showsOriginGhost(): boolean {
+    return this.origin === "transparent";
   }
 
   /**
@@ -143,6 +166,20 @@ export class Counter {
     ctx.rotate((this.orientation * Math.PI) / 180);
     ctx.translate(-this.centerX, -this.centerY);
     this.drawUpright(ctx);
+    ctx.restore();
+  }
+
+  /**
+   * Le pion en transparence, posé sur sa case de départ. Dessiné sous les
+   * pions, il ne capte pas la souris : c'est un repère, pas un objet.
+   */
+  drawOriginGhost(ctx: CanvasRenderingContext2D): void {
+    if (!this.showsOriginGhost) return;
+    if (!this.frontImage.complete) return;
+
+    ctx.save();
+    ctx.globalAlpha = ORIGIN_GHOST_ALPHA;
+    ctx.drawImage(this.frontImage, this.initialX, this.initialY, this.width, this.height);
     ctx.restore();
   }
 

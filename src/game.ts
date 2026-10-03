@@ -70,6 +70,19 @@ let isClosed = false;
 
 const sessionInfo = document.getElementById("session-info");
 
+// Le bandeau affiche le jeu et le joueur plutôt que le nom du site : on sait
+// d'un coup d'œil où l'on est et sous quelle identité.
+const gameTitle = document.getElementById("game-title");
+
+function updateGameTitle(): void {
+  if (!gameTitle) return;
+  const gameName = originGameName() ?? "Online Boardgames";
+  const nickname = loadPlayerIdentity()?.name;
+  gameTitle.textContent = nickname ? `${gameName} — ${nickname}` : gameName;
+}
+
+updateGameTitle();
+
 function updateSessionInfo(): void {
   if (!sessionInfo) return;
   if (!currentSession?.key) {
@@ -136,6 +149,11 @@ function loadComponents(components: SessionComponents | undefined): void {
         backImg,
         // la face affichée quand la partie a été sauvegardée en cours de jeu
         token.side ?? "front",
+        // "transparent" demande d'afficher le pion fantôme sur sa case de départ
+        token.origin ?? null,
+        // case de départ, celle où revient un pion déposé sur son fantôme
+        token.initial_x ?? token.x,
+        token.initial_y ?? token.y,
       );
       // l'état du rectangle vient du serveur
       if (typeof token.border === "boolean") counter.border = token.border;
@@ -206,6 +224,9 @@ function applyComponentState(state: ComponentState | undefined): void {
   counter.x = state.x;
   counter.y = state.y;
   if (typeof state.border === "boolean") counter.border = state.border;
+  // "fixe la position" déplace la case de départ : le fantôme doit suivre
+  if (typeof state.initial_x === "number") counter.initialX = state.initial_x;
+  if (typeof state.initial_y === "number") counter.initialY = state.initial_y;
 }
 
 const buttonFix = new Button(1350, 10, 220, 40, "Fixe la position", () => {
@@ -607,6 +628,12 @@ function draw(): void {
 
   // le bouton de repositionnement est réservé aux joueurs
   if (!isWatcher) buttonFix.draw(ctx);
+
+  // les fantômes de case de départ passent sous les pions, pour que le pion
+  // réel posé dessus reste lisible
+  for (const counter of counters) {
+    counter.drawOriginGhost(ctx);
+  }
 
   for (const counter of counters) {
     if (counter.image.complete) {

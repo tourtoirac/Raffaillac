@@ -32,6 +32,14 @@ export interface TokenItem {
   orientable?: boolean;
   /** angle courant, en degrés vers la droite */
   orientation?: number;
+  /**
+   * "transparent" affiche le pion en transparence sur sa case de départ et
+   * renvoie le pion dessus quand on l'y dépose ; null sur un pion ordinaire
+   */
+  origin?: string | null;
+  /** case de départ : là où le pion revient quand on le dépose */
+  initial_x?: number;
+  initial_y?: number;
 }
 
 export interface DiceItem {
@@ -142,6 +150,9 @@ export interface ComponentState {
   /** rectangle vert : false une fois le jeton déplacé */
   border?: boolean;
   move_border?: boolean;
+  /** case de départ mise à jour par "fixe la position" */
+  initial_x?: number;
+  initial_y?: number;
 }
 
 // le joueur a remis le rectangle vert sur tous les jetons
