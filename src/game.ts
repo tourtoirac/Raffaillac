@@ -346,6 +346,16 @@ function flushMoves(): void {
   }
 }
 
+// Un pion relâché repasse en fin de liste : il se dessine alors au-dessus des
+// pions de la pile qu'il vient de rejoindre. L'ordre reste le même pour tous,
+// puisque le serveur diffuse le relâchement à toute la session.
+function bringCounterToFront(counter: Counter): void {
+  const index = counters.indexOf(counter);
+  if (index === -1 || index === counters.length - 1) return;
+  counters.splice(index, 1);
+  counters.push(counter);
+}
+
 // Le serveur accuse réception de chaque acquisition / relâchement :
 // la main est reconstruite à partir de ces accusés, un composant à la fois.
 function applyHandEvent(answer: HandEvent, isOwnRequest: boolean): void {
@@ -363,6 +373,7 @@ function applyHandEvent(answer: HandEvent, isOwnRequest: boolean): void {
   // Le rectangle vert voyage dans le même message.
   if (answer.event === "release") {
     applyComponentState((answer as ReleaseEvent).component_json);
+    bringCounterToFront(counter);
   }
 
   // les messages des autres joueurs sont affichés plus tard
@@ -692,7 +703,19 @@ function draw(): void {
     counter.drawOriginGhost(ctx);
   }
 
+  // les pions sont dessinés dans l'ordre de la liste : un pion plus loin dans
+  // la liste recouvre ceux d'avant. Un relâchement remet le pion en fin de
+  // liste, si bien qu'il reste au-dessus de la pile qu'il vient de rejoindre.
   for (const counter of counters) {
+    if (hand.includes(counter)) continue;
+    if (counter.image.complete) {
+      counter.draw(ctx);
+    }
+  }
+
+  // la main se dessine après le plateau : un pion sélectionné est toujours
+  // visible, au-dessus des pions non sélectionnés
+  for (const counter of hand) {
     if (counter.image.complete) {
       counter.draw(ctx);
     }
