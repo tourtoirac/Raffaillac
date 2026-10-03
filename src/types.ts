@@ -66,6 +66,9 @@ export interface SessionComponents {
 
 export interface Session {
   key: string;
+  // le code sert a retrouver la session cote serveur quand elle a ete retiree
+  // de la memoire apres le depart du dernier participant (passage lobby -> jeu)
+  code?: string;
   components?: SessionComponents;
   players?: SessionPlayer[];
 }

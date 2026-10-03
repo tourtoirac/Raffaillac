@@ -5,7 +5,7 @@ import { Counter } from "./engine/counter";
 import type { RotationDirection } from "./engine/counter";
 import { Dice } from "./engine/dice";
 import { lobbyReturnUrl, originGameName } from "./navigation";
-import { loadPlayerIdentity, loadSession, storeSession } from "./session";
+import { clearSession, loadPlayerIdentity, loadSession, storeSession } from "./session";
 import type {
   AcquireEvent,
   BoardItem,
@@ -736,9 +736,31 @@ const CLOSE_ERRORS = [
   "session_not_archived",
 ];
 
+// Le serveur ne connait plus la session : Tourtoirac la garde en memoire, un
+// redemarrage l'a perdue. Le plateau affiche n'est qu'un instantane local,
+// aucun pion n'y est prenable ; on vide la session morte et on revient au lobby
+// plutot que de laisser un plateau qui ne repond plus.
+const DEAD_SESSION_ERRORS = ["session_not_found", "no_session"];
+
+let leavingDeadSession = false;
+
 function reportServerError(data: ServerErrorEvent): void {
   const code = data.error?.code;
   console.warn("[WS] Erreur du serveur :", code, data.error?.message);
+
+  if (code && DEAD_SESSION_ERRORS.includes(code)) {
+    if (leavingDeadSession) return;
+    leavingDeadSession = true;
+    clearPending();
+    clearSession();
+    window.alert(
+      "Cette partie n'existe plus côté serveur.\n\n" +
+        "Tu reviens au lobby : relance une partie pour jouer.",
+    );
+    window.location.href = leaveUrl;
+    return;
+  }
+
   if (!code || !CLOSE_ERRORS.includes(code)) return;
 
   // la partie n'est pas close : on ne part pas sur le lobby
@@ -885,6 +907,9 @@ if (socket) {
       socket.send({
         action: "resume_session",
         session_key: currentSession.key,
+        // la session peut avoir ete retiree de la memoire apres le depart du
+        // lobby : le code permet au serveur de la reconstruire
+        session_code: currentSession.code,
         nickname: identity?.name ?? "Anonymous",
         role: identity?.role ?? "player",
       });
