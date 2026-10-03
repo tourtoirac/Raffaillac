@@ -176,6 +176,8 @@
       background-color: #f0f0f0;
     }
 
+    /* pseudo d'un joueur déconnecté : sa place est libre, on peut cliquer pour
+       la reprendre */
     .player-btn {
       padding: 6px 12px;
       margin: 2px;
@@ -189,6 +191,17 @@
 
     .player-btn:hover {
       background-color: #d0e4ff;
+    }
+
+    /* joueur actuellement en jeu : la place est prise, le bouton reste vert
+       mais ne réagit pas (ni clic, ni survol) */
+    .player-btn.connected,
+    .player-btn.connected:disabled {
+      border-color: #28a745;
+      background-color: #e8f7ec;
+      color: #1d7a33;
+      cursor: default;
+      opacity: 1;
     }
 
     .join-session-btn {

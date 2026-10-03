@@ -120,6 +120,7 @@ const REFUSAL_CODES = new Set([
   "session_unavailable",
   "watchers_not_allowed",
   "watchers_full",
+  "nickname_connected",
 ]);
 
 // un message peut être volumineux (session_created transporte tous les
@@ -355,6 +356,8 @@ function openJoinModal(
   nicknameInput.readOnly = nickname !== "";
   (document.getElementById("join-key") as HTMLInputElement).value = "";
   (document.getElementById("join-access-key") as HTMLInputElement).value = "";
+  (document.getElementById("join-nickname-error") as HTMLDivElement).textContent =
+    "Le nickname est obligatoire.";
   hideError("join-nickname-error");
   hideError("join-key-error");
   hideError("join-access-key-error");
@@ -404,6 +407,11 @@ function reopenJoinModalAfterRefusal(code: string): void {
   switch (code) {
     case "access_key_incorrect":
       showError("join-access-key-error");
+      break;
+    case "nickname_connected":
+      (document.getElementById("join-nickname-error") as HTMLDivElement).textContent =
+        "Ce pseudo est déjà en jeu.";
+      showError("join-nickname-error");
       break;
     case "watchers_not_allowed":
       (document.getElementById("join-role-error") as HTMLDivElement).textContent =
@@ -543,10 +551,20 @@ function renderAll(): void {
         const playersCell = document.createElement("td");
         if (session.players && session.players.length > 0) {
           for (const player of session.players) {
+            // un joueur en jeu occupe sa place : son bouton est vert et
+            // inactif. Dès qu'il se déconnecte, la place se libère et le bouton
+            // redevient cliquable pour reprendre ce pseudo directement.
+            const connected = player.connected === true;
             const pBtn = document.createElement("button");
-            pBtn.className = "player-btn";
+            pBtn.className = "player-btn" + (connected ? " connected" : "");
             pBtn.textContent = player.nickname;
-            pBtn.onclick = () => openJoinModal(session.code ?? "", player.nickname, name);
+            pBtn.disabled = connected;
+            if (connected) {
+              pBtn.title = "En jeu";
+            } else {
+              pBtn.title = "Rejoindre en tant que " + player.nickname;
+              pBtn.onclick = () => openJoinModal(session.code ?? "", player.nickname, name);
+            }
             if (player.owner) {
               const badge = document.createElement("span");
               badge.className = "owner-badge";

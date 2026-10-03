@@ -32,6 +32,12 @@ const RESPONSE_TIMEOUT = 2000;
 // repli si le jeu ne dit rien dans son game_json, ou si un Tourtoirac plus
 // ancien n'annonçait pas le délai dans l'événement de lancer
 const ROLL_COOLDOWN_SECONDS = 5;
+// position du bouton "Fixe la position" quand le jeu ne dit rien : un jeu peut
+// le déplacer (options.fix_positions) ou le masquer (options.fix_positions null)
+const DEFAULT_FIX_BUTTON_X = 1350;
+const DEFAULT_FIX_BUTTON_Y = 10;
+const FIX_BUTTON_WIDTH = 220;
+const FIX_BUTTON_HEIGHT = 40;
 
 type HandEvent = AcquireEvent | ReleaseEvent;
 
@@ -229,10 +235,30 @@ function applyComponentState(state: ComponentState | undefined): void {
   if (typeof state.initial_y === "number") counter.initialY = state.initial_y;
 }
 
-const buttonFix = new Button(1350, 10, 220, 40, "Fixe la position", () => {
-  // le serveur remet le rectangle vert et prévient joueurs et spectateurs
-  getSocket()?.send({ action: "fix_positions" });
-});
+// bouton de repositionnement : sa position vient du game_json du jeu, qui peut
+// aussi le masquer. Absent, le client garde sa position par défaut.
+let buttonFix: Button | null = null;
+
+function setupFixButton(session: Session | null): void {
+  const position = session?.options?.fix_positions;
+  if (position === null) {
+    buttonFix = null;
+    return;
+  }
+  const x = typeof position?.x === "number" ? position.x : DEFAULT_FIX_BUTTON_X;
+  const y = typeof position?.y === "number" ? position.y : DEFAULT_FIX_BUTTON_Y;
+  buttonFix = new Button(
+    x,
+    y,
+    FIX_BUTTON_WIDTH,
+    FIX_BUTTON_HEIGHT,
+    "Fixe la position",
+    () => {
+      // le serveur remet le rectangle vert et prévient joueurs et spectateurs
+      getSocket()?.send({ action: "fix_positions" });
+    },
+  );
+}
 
 // -------------------------------------------------
 // Caméra
@@ -257,6 +283,14 @@ function initializeCamera(): void {
   zoom = Math.max(MIN_ZOOM, Math.min(MAX_ZOOM, zoom));
 
   cameraInitialized = true;
+}
+
+// Recentre la caméra sur un pion, sans toucher au zoom : le clic sur le
+// fantôme d'un pion "transparent" y amène l'écran. On vise le centre du pion,
+// pas son coin, pour qu'il tombe au milieu de la vue.
+function centerCameraOn(counter: Counter): void {
+  cameraX = counter.x + counter.width / 2 - canvas.width / (2 * zoom);
+  cameraY = counter.y + counter.height / 2 - canvas.height / (2 * zoom);
 }
 
 // -------------------------------------------------
@@ -393,6 +427,18 @@ function hitCounter(wx: number, wy: number): Counter | null {
   return null;
 }
 
+// le pion "transparent" dont le fantôme est sous le pointeur, ou null. Le
+// fantôme est dessiné sous les pions ; un pion réel au même endroit est donc
+// traité avant lui, pour ne pas voler le clic qui visait ce pion.
+function hitOriginGhost(wx: number, wy: number): Counter | null {
+  for (let i = counters.length - 1; i >= 0; i -= 1) {
+    if (counters[i].originGhostContains(wx, wy)) {
+      return counters[i];
+    }
+  }
+  return null;
+}
+
 // le pion sous le pointeur : ses zones de rotation ne s'affichent que pour
 // celui-là, et seulement si la main est vide
 let hoveredCounter: Counter | null = null;
@@ -473,13 +519,24 @@ function onMouseDown(event: MouseEvent): void {
   lastMouseWorldX = wx;
   lastMouseWorldY = wy;
 
-  if (!isWatcher && buttonFix.contains(wx, wy)) {
+  if (!isWatcher && buttonFix && buttonFix.contains(wx, wy)) {
     buttonFix.callback();
     return;
   }
 
   // une requête est déjà en attente de réponse du serveur
   if (pending !== null) return;
+
+  // clic sur le fantôme d'un pion "transparent" : la caméra se recentre sur le
+  // pion, joueurs comme spectateurs. Le fantôme étant dessiné sous les pions,
+  // un pion réel sous le pointeur garde la priorité.
+  if (hitCounter(wx, wy) === null) {
+    const ghost = hitOriginGhost(wx, wy);
+    if (ghost !== null) {
+      centerCameraOn(ghost);
+      return;
+    }
+  }
 
   // un spectateur regarde : il ne prend aucun pion en main. Le serveur refuse
   // l'acquire de son côté, on n'envoie donc même pas la demande. Il peut en
@@ -627,7 +684,7 @@ function draw(): void {
   }
 
   // le bouton de repositionnement est réservé aux joueurs
-  if (!isWatcher) buttonFix.draw(ctx);
+  if (!isWatcher && buttonFix) buttonFix.draw(ctx);
 
   // les fantômes de case de départ passent sous les pions, pour que le pion
   // réel posé dessus reste lisible
@@ -808,6 +865,7 @@ function handleSessionEvent(data: GameServerMessage): void {
   currentSession = session;
   storeSession(session);
   updateSessionInfo();
+  setupFixButton(session);
 
   // la situation initiale n'est chargée qu'une seule fois. Le test sur
   // counters ne suffisait plus : une partie sans pion le relisait à chaque
@@ -887,6 +945,7 @@ if (closeLink) {
 }
 
 loadComponents(currentSession?.components);
+setupFixButton(currentSession);
 // une session déjà connue est resynchronisée par le resume_session, pas par un
 // nouveau chargement de la situation
 componentsLoaded = currentSession?.key !== undefined;

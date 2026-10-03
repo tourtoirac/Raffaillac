@@ -64,6 +64,20 @@ export interface SessionComponents {
   dice?: DiceItem[];
 }
 
+// position du bouton "Fixe la position", choisie par le jeu dans son game_json
+export interface FixPositionButton {
+  x: number;
+  y: number;
+}
+
+export interface SessionOptions {
+  /**
+   * absent : le client garde son bouton a sa position par defaut ;
+   * null : le jeu ne veut pas du bouton ; objet : le bouton va a cet endroit
+   */
+  fix_positions?: FixPositionButton | null;
+}
+
 export interface Session {
   key: string;
   // le code sert a retrouver la session cote serveur quand elle a ete retiree
@@ -71,11 +85,14 @@ export interface Session {
   code?: string;
   components?: SessionComponents;
   players?: SessionPlayer[];
+  options?: SessionOptions;
 }
 
 export interface SessionPlayer {
   nickname: string;
   owner?: boolean;
+  /** ce joueur est-il actuellement connecté à la partie ? */
+  connected?: boolean;
 }
 
 export interface GameVariantInfo {

@@ -170,6 +170,20 @@ export class Counter {
   }
 
   /**
+   * Le clic vise-t-il le fantôme de la case de départ ? Le fantôme n'a pas de
+   * zone de préhension : il sert juste de cible pour recentrer la caméra.
+   */
+  originGhostContains(x: number, y: number): boolean {
+    if (!this.showsOriginGhost) return false;
+    return (
+      this.initialX <= x &&
+      x <= this.initialX + this.width &&
+      this.initialY <= y &&
+      y <= this.initialY + this.height
+    );
+  }
+
+  /**
    * Le pion en transparence, posé sur sa case de départ. Dessiné sous les
    * pions, il ne capte pas la souris : c'est un repère, pas un objet.
    */
