@@ -59,6 +59,40 @@ const FIX_BUTTON_HEIGHT = 40;
 const FLIP_BUTTON_WIDTH = 70;
 const FLIP_BUTTON_HEIGHT = 26;
 
+// ---------------------------------------------
+// Défilement de la caméra au bord de l'écran
+// ---------------------------------------------
+
+// Vietnam a un plateau de 7600 px de large : impossible à tenir dans une fenêtre.
+// Le glissement à la souris Suffit pour un joueur qui ne tient rien, mais un
+// pion en main occupe déjà la souris : sans ce défilement, on ne peut pas
+// conduire le plateau à l'autre bout de l'écran tout en déplaçant le pion.
+
+// À l'intérieur de cette bande, près du bord, la caméra défile. En pixels
+// d'écran, donc independent du zoom : c'est la distance au bord de la fenêtre
+// que le joueur garde, pas une distance dans le monde.
+const EDGE_BAND = 90;
+
+// La vitesse est nulle au bord exact de la bande et maximale à celui de
+// l'écran : un dégradé, pour que le franchissement soit doux plutôt que
+// saccadé. On élève la fraction au carré plutôt que de la premiere puissance.
+const EDGE_EASE = 2;
+
+// Vitesse maximale du défilement, en pixels d'écran par seconde. Assez pour
+// traverser le plateau de Vietnam en quelques secondes, assez lent pour viser
+// une case sans la dépasser.
+const EDGE_SCROLL_SPEED = 900;
+
+// Léger retard avant le premier déplacement, pour qu'un pointeur pressé contre
+// le bord — la plupart du temps un simple geste vers le bord — ne fasse pas
+// défiler la carte.
+const EDGE_SCROLL_DELAY_MS = 250;
+
+// Un onglet en arrière-plan ne rafraîchit plus : le pas de temps qu'il retrouve
+// en revenant au premier plan est énorme. On le borne pour que la carte ne
+// saute pas d'un coup.
+const EDGE_SCROLL_MAX_FRAME_MS = 50;
+
 type HandEvent = AcquireEvent | ReleaseEvent;
 
 interface GameServerMessage {
@@ -498,6 +532,91 @@ function centerCameraOn(counter: Counter): void {
 }
 
 // -------------------------------------------------
+// Défilement au bord : le pointeur, et ce qu'il garde
+// -------------------------------------------------
+
+// Où se trouve le pointeur, en pixels d'écran. Sa position est suivie même
+// quand il n'a rien déclenché : un pointeur immobile n'émet aucun mousemove, et
+// c'est pourtant le cas le plus courant pendant un défilement.
+let edgeX = -1;
+let edgeY = -1;
+
+// Proximité d'un bord, en fraction de la vitesse maximale : 1 sur le bord
+// même, 0 dès qu'on en sort. On normalise par la bande, pour que la taille de
+// la fenêtre n'ait pas d'effet sur la façon dont le défilement s'enclenche.
+function edgeProximity(distance: number, extent: number): number {
+  if (extent <= 0) return 0;
+  return Math.max(0, Math.min(1, 1 - distance / Math.min(EDGE_BAND, extent / 2)));
+}
+
+// Proximité du bord le plus proche sur un axe, signée : positive vers la fin de
+// l'axe (droite, bas), négative vers son début. Le signe est indispensable —
+// être près du bord gauche et près du bord droit se ressemblent, mais on défile
+// alors dans deux sens opposés. Les deux bords sont pesés puis on garde le plus
+// fort : dans un coin le pointeur est près des deux, et c'est le bord qu'il
+// approche qui doit décider du sens.
+function edgeSignedOnAxis(position: number, extent: number): number {
+  const nearStart = edgeProximity(position, extent);
+  const nearEnd = edgeProximity(extent - position, extent);
+  return nearStart >= nearEnd ? -nearStart : nearEnd;
+}
+
+// Le vecteur de défilement, en pixels d'écran par seconde. cameraX et cameraY
+// sont les coordonnées monde du coin haut gauche de la vue : les augmenter
+// déplace la vue vers l'est et vers le sud, et fait glisser la carte dans le
+// sens du bord que le pointeur approche. Chaque axe ne dépend que de sa propre
+// bande — un pointeur au bord droit défile droit, même s'il est aussi un peu
+// plus bas.
+//
+// L'adoucissement porte sur la valeur absolue et le signe est remis ensuite :
+// élevé à la puissance sur une valeur négative, le résultat changerait de signe
+// pour un exposant impair, et le défilement partirait à l'opposé.
+function edgeScrollVector(): [number, number] {
+  const eased = (fraction: number): number =>
+    Math.sign(fraction) * Math.abs(fraction) ** EDGE_EASE * EDGE_SCROLL_SPEED;
+  return [
+    eased(edgeSignedOnAxis(edgeX, canvas.width)),
+    eased(edgeSignedOnAxis(edgeY, canvas.height)),
+  ];
+}
+
+// Fait défiler la caméra d'un cran. Le mouvement est exprimé en pixels d'écran
+// puis divisé par le zoom : la caméra avance d'autant de pixels du monde que la
+// vue en fait, et le défilement garde donc la même vitesse à tous les zooms.
+//
+// La main est laissée en place, et c'est tout l'intérêt du geste : le pion suit
+// le pointeur, donc le monde, au lieu de rester collé à sa case d'origine. On
+// ne translate la main que si elle est pleine — un pointeur qui traîne au bord
+// avec la main vide ne doit pas secouer des pions que personne ne tient.
+function stepEdgeScroll(dt: number): void {
+  if (!edgeScrolling()) return;
+
+  const [vx, vy] = edgeScrollVector();
+  if (vx === 0 && vy === 0) return;
+
+  cameraX += (vx * dt) / zoom;
+  cameraY += (vy * dt) / zoom;
+
+  if (hand.length === 0) return;
+
+  // La position de la main se déduit du pointeur, pas du temps : sinon le pion
+  // se déplacerait deux fois, une fois avec la carte et une fois avec la souris.
+  // lastMouseWorld est réécrit ici, donc la main ne part pas à la dérive.
+  const [wx, wy] = screenToWorld(edgeX, edgeY);
+  const [lx, ly] = flipPoint(wx, wy);
+  lastMouseWorldX = lx;
+  lastMouseWorldY = ly;
+  for (const counter of hand) {
+    counter.x = lx;
+    counter.y = ly;
+  }
+  handWorldX = lx;
+  handWorldY = ly;
+  movesDirty = true;
+  counterInfoText = handInfoText();
+}
+
+// -------------------------------------------------
 // Main : composants attachés par le serveur
 // -------------------------------------------------
 
@@ -859,6 +978,13 @@ function onMouseDown(event: MouseEvent): void {
 function onMouseMove(event: MouseEvent): void {
   const sx = event.offsetX;
   const sy = event.offsetY;
+
+  // Le défilement de la caméra a ses propres règles de déclenchement, alors que
+  // ce gestionnaire s'interrompt dès qu'un pion est en main. Il est donc appelé
+  // avant toute sortie de fonction, et jamais à l'intérieur de la boucle de
+  // dessin, qui ignore le temps écoulé depuis le dernier mouvement.
+  trackPointerForEdgeScroll(sx, sy);
+
   const [wx, wy] = screenToWorld(sx, sy);
 
   // même conversion que dans onMouseDown : le survol et le déplacement d'un
@@ -900,6 +1026,57 @@ function onMouseMove(event: MouseEvent): void {
 
 function onMouseUp(): void {
   panning = false;
+}
+
+// Un pointeur qui quitte le canvas ne peut plus s'en éloigner : le seul signal
+// qu'il enverra pour arrêter est son retour. Sans cette remise à zéro, la carte
+// continuerait de défiler indéfiniment, et le joueur n'aurait plus le moyen de
+// l'arrêter autrement qu'en revenant au bord, ce qui le relance. Le défilement
+// repart au retour, avec son délai d'entrée.
+function onMouseLeave(): void {
+  edgeInside = false;
+  onMouseUp();
+}
+
+// ---------------------------------------------
+// Gestes de la caméra : suivi du pointeur
+// ---------------------------------------------
+
+// Le pointeur est-il dans une bande de défilement ? C'est le seul état qui
+// commande l'arrêt : le défilement dure tant que le pointeur y reste, et
+// s'interrompt dès qu'il en sort.
+let edgeInside = false;
+
+// Instant où le défilement devient permis. Nul tant que le pointeur n'a pas
+// touché de bord.
+let edgeArmedAt = 0;
+
+// Horloge de la boucle de dessin : le défilement se déplace d'un pas de temps
+// réel, pas d'un rafraîchissement, pour que sa vitesse ne dépende pas du nombre
+// d'images par seconde.
+let lastFrameAt = 0;
+
+// Le pointeur est-il dans une bande, et assez longtemps pour que ce geste soit
+// une intention plutôt qu'un frôlement ?
+function edgeScrolling(): boolean {
+  if (!edgeInside) return false;
+  return Date.now() >= edgeArmedAt;
+}
+
+function trackPointerForEdgeScroll(sx: number, sy: number): void {
+  edgeX = sx;
+  edgeY = sy;
+
+  // Un pointeur pressé contre un bord ne quitte jamais la bande : la minuterie
+  // ne doit donc être remise qu'à son entrée, sinon le défilement ne démarrerait
+  // jamais. Le défilement s'arrête quand le pointeur s'écarte, rien d'autre.
+  const inside =
+    Math.abs(edgeSignedOnAxis(sx, canvas.width)) > 0 ||
+    Math.abs(edgeSignedOnAxis(sy, canvas.height)) > 0;
+  if (inside && !edgeInside) {
+    edgeArmedAt = Date.now() + EDGE_SCROLL_DELAY_MS;
+  }
+  edgeInside = inside;
 }
 
 /**
@@ -1408,6 +1585,14 @@ if (socket) {
 // -------------------------------------------------
 
 function gameLoop(): void {
+  // Le temps réel, pas le temps disponible : deux rafraîchissements successifs
+  // peuvent recevoir le même timestamp, et une frame longue ne doit pas non
+  // plus faire sauter la carte d'un coup.
+  const now = performance.now();
+  const dt = lastFrameAt === 0 ? 0 : Math.min(EDGE_SCROLL_MAX_FRAME_MS, (now - lastFrameAt) / 1000);
+  lastFrameAt = now;
+
+  stepEdgeScroll(dt);
   draw();
   flushMoves();
   window.requestAnimationFrame(gameLoop);
@@ -1425,7 +1610,7 @@ canvas.addEventListener("mousedown", onMouseDown);
 canvas.addEventListener("dblclick", onDoubleClick);
 canvas.addEventListener("mousemove", onMouseMove);
 canvas.addEventListener("mouseup", onMouseUp);
-canvas.addEventListener("mouseleave", onMouseUp);
+canvas.addEventListener("mouseleave", onMouseLeave);
 canvas.addEventListener("wheel", onMouseWheel, { passive: false });
 
 // relâchement hors du canvas
