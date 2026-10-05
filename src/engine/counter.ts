@@ -28,21 +28,31 @@ export class Counter {
   readonly backImage: HTMLImageElement | null;
   readonly width: number;
   readonly height: number;
+  /** le jeu autorise-t-il à repositionner ce pion, rectangle vert compris */
   readonly moveBorder: boolean;
+  /** border du jeu : ce pion porte-t-il une ombre ? */
   readonly shadow: boolean;
   /**
    * "transparent" quand le jeu demande d'afficher le pion en transparence sur
-   * sa case de départ ; null sur un pion ordinaire
+   * sa case d'origine ; null sur un pion ordinaire
    */
   readonly origin: string | null;
 
   x: number;
   y: number;
-  /** case de départ, où revient un pion "transparent" qu'on dépose dessus */
+  /** case de départ, où revient un pion déposé sur son fantôme */
   initialX: number;
   initialY: number;
-  /** rectangle vert : piloté par le serveur, valable pour tous */
-  border: boolean;
+  /**
+   * où est posé le fantôme, figé à l'installation du jeu. Le setup et "Fixe la
+   * position" déplacent initialX, pas ceci : le fantôme est le repère que le
+   * jeu a posé sur son plateau, il ne bouge pas avec la partie. null quand le
+   * jeu ne demande aucun fantôme.
+   */
+  readonly originX: number | null;
+  readonly originY: number | null;
+  /** in_place : rectangle vert, le pion est-il sur sa case de départ ? */
+  inPlace: boolean;
   held: boolean;
   heldBy: string | null;
   /** le jeu autorise-t-il à faire pivoter ce pion */
@@ -68,6 +78,8 @@ export class Counter {
     origin: string | null = null,
     initialX = x,
     initialY = y,
+    originX: number | null = null,
+    originY: number | null = null,
   ) {
     this.name = name;
     this.frontImage = frontImage;
@@ -77,11 +89,17 @@ export class Counter {
     this.width = width;
     this.height = height;
     this.moveBorder = moveBorder;
+    // border du jeu : une ombre, et rien d'autre. Elle ne bouge pas avec le
+    // pion, contrairement au rectangle vert, qui part dès qu'il bouge.
     this.shadow = shadow;
     this.origin = origin;
     this.initialX = initialX;
     this.initialY = initialY;
-    this.border = moveBorder;
+    // le fantome reprend la place que le jeu a donnee au pion a son
+    // installation. C'est initialX/initialY qui bougent ensuite, jamais lui.
+    this.originX = origin === "transparent" ? (originX ?? x) : null;
+    this.originY = origin === "transparent" ? (originY ?? y) : null;
+    this.inPlace = moveBorder;
     this.held = false;
     this.heldBy = null;
     this.orientable = orientable;
@@ -101,9 +119,9 @@ export class Counter {
     return this.backImage !== null;
   }
 
-  /** le jeu demande-t-il un pion fantôme sur la case de départ ? */
+  /** le jeu demande-t-il un pion fantôme sur sa case d'origine ? */
   get showsOriginGhost(): boolean {
-    return this.origin === "transparent";
+    return this.origin === "transparent" && this.originX !== null && this.originY !== null;
   }
 
   /**
@@ -170,39 +188,43 @@ export class Counter {
   }
 
   /**
-   * Le clic vise-t-il le fantôme de la case de départ ? Le fantôme n'a pas de
+   * Le clic vise-t-il le fantôme de la case d'origine ? Le fantôme n'a pas de
    * zone de préhension : il sert juste de cible pour recentrer la caméra.
    */
   originGhostContains(x: number, y: number): boolean {
-    if (!this.showsOriginGhost) return false;
+    const originX = this.originX;
+    const originY = this.originY;
+    if (!this.showsOriginGhost || originX === null || originY === null) return false;
     return (
-      this.initialX <= x &&
-      x <= this.initialX + this.width &&
-      this.initialY <= y &&
-      y <= this.initialY + this.height
+      originX <= x &&
+      x <= originX + this.width &&
+      originY <= y &&
+      y <= originY + this.height
     );
   }
 
   /**
-   * Le pion en transparence, posé sur sa case de départ. Dessiné sous les
+   * Le pion en transparence, posé sur sa case d'origine. Dessiné sous les
    * pions, il ne capte pas la souris : c'est un repère, pas un objet.
    */
   drawOriginGhost(ctx: CanvasRenderingContext2D): void {
-    if (!this.showsOriginGhost) return;
+    const originX = this.originX;
+    const originY = this.originY;
+    if (!this.showsOriginGhost || originX === null || originY === null) return;
     if (!this.frontImage.complete) return;
 
     ctx.save();
     ctx.globalAlpha = ORIGIN_GHOST_ALPHA;
-    ctx.drawImage(this.frontImage, this.initialX, this.initialY, this.width, this.height);
+    ctx.drawImage(this.frontImage, originX, originY, this.width, this.height);
     ctx.restore();
   }
 
   private drawUpright(ctx: CanvasRenderingContext2D): void {
     // L'ombre portée passe par le dessin lui-même : le contexte la peint
-    // derrière l'image, ce qui évite un second dessin de la même image. Elle
-    // accompagne le rectangle vert sans le remplacer : un pion posé chez lui a
-    // les deux.
-    const castsShadow = this.shadow || this.border;
+    // derrière l'image, ce qui évite un second dessin de la même image. Elle ne
+    // dépend que de border : elle rend le pion plus réaliste et suit le jeu
+    // toute la partie, déplacé ou non.
+    const castsShadow = this.shadow;
     if (castsShadow) {
       ctx.shadowColor = SHADOW_COLOR;
       ctx.shadowBlur = SHADOW_BLUR;
@@ -225,7 +247,7 @@ export class Counter {
       ctx.strokeRect(this.x, this.y, this.width, this.height);
     }
 
-    if (this.border) {
+    if (this.inPlace) {
       ctx.lineWidth = 5;
       ctx.strokeStyle = "green";
       ctx.strokeRect(this.x, this.y, this.width, this.height);

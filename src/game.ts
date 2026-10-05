@@ -3,6 +3,15 @@ import { allBoardsLoaded, boardDims, createBoard } from "./engine/board";
 import type { Board } from "./engine/board";
 import { Counter } from "./engine/counter";
 import type { RotationDirection } from "./engine/counter";
+import {
+  counterActionZoneAt,
+  createCounterBox,
+  drawCounterActionZones,
+  drawCounterBox,
+  hitCounterBox,
+  isActionEnabled,
+} from "./engine/counter_box";
+import type { CounterAction, CounterBox } from "./engine/counter_box";
 import { Dice } from "./engine/dice";
 import { lobbyReturnUrl, originGameName } from "./navigation";
 import { clearSession, loadPlayerIdentity, loadSession, storeSession } from "./session";
@@ -10,6 +19,8 @@ import type {
   AcquireEvent,
   BoardItem,
   ComponentState,
+  CounterItem,
+  CounterValueEvent,
   DiceItem,
   FixPositionsEvent,
   FlipEvent,
@@ -21,6 +32,8 @@ import type {
   Session,
   SessionComponents,
   SessionCreatedEvent,
+  SetupEntry,
+  SetupEvent,
   TokenItem,
 } from "./types";
 import { getSocket } from "./ws/wsClient";
@@ -38,6 +51,13 @@ const DEFAULT_FIX_BUTTON_X = 1350;
 const DEFAULT_FIX_BUTTON_Y = 10;
 const FIX_BUTTON_WIDTH = 220;
 const FIX_BUTTON_HEIGHT = 40;
+// bouton "flip" d'un plateau que le jeu marque flippable : le plateau se
+// retourne sur l'écran de ce joueur, sans rien changer pour les autres. Il est
+// ancré au plateau mais dimensionné en pixels d'écran, pour rester cliquable à
+// tous les zooms : Vietnam a un plateau de 7600 px de large, où 80 px posés
+// dans le monde feraient 5 px à l'écran.
+const FLIP_BUTTON_WIDTH = 70;
+const FLIP_BUTTON_HEIGHT = 26;
 
 type HandEvent = AcquireEvent | ReleaseEvent;
 
@@ -110,6 +130,11 @@ let boards: Board[] = [];
 let counters: Counter[] = [];
 const countersById = new Map<string, Counter>();
 
+// les compteurs sont des composants "fixed" comme les plateaux : ils ne
+// bougent pas, mais leurs deux zones + et - se cliquent
+let counterBoxes: CounterBox[] = [];
+const counterBoxesById = new Map<string, CounterBox>();
+
 // un dé se lance d'un clic : ni prenable ni déplaçable
 let dices: Dice[] = [];
 const dicesById = new Map<string, Dice>();
@@ -120,10 +145,32 @@ let componentsLoaded = false;
 // un spectateur regarde mais ne joue pas : pas de bouton "fixe la position"
 let isWatcher = false;
 
+// le setup du jeu, tant que le serveur ne l'a pas fait appliquer. Il attend que
+// tous les composants soient a l'ecran : un pion dont l'image charge encore
+// changerait de place sous les yeux du joueur.
+let pendingSetup: SetupEntry[] = [];
+
+// le setup n'est demande qu'une fois. Le serveur le vide de toute facon, mais un
+// second envoi avant sa reponse ferait bouger la partie pour rien.
+let setupRequested = false;
+
+// le setup a-t-il deja ete lu dans la session ? Comme la situation initiale, il
+// ne se lit qu'une fois : les messages de session suivants ne doivent pas
+// re-armer la mise en place.
+let setupRead = false;
+
 function loadComponents(components: SessionComponents | undefined): void {
   boards = (components?.fixed ?? [])
     .filter((item) => item.kind === "board")
     .map((item) => createBoard(item as BoardItem));
+
+  counterBoxesById.clear();
+  counterBoxes = (components?.fixed ?? [])
+    .filter((item) => item.kind === "counter")
+    .map((item) => createCounterBox(item as CounterItem));
+  for (const box of counterBoxes) {
+    counterBoxesById.set(box.name, box);
+  }
 
   countersById.clear();
   counters = (components?.movable ?? [])
@@ -147,7 +194,8 @@ function loadComponents(components: SessionComponents | undefined): void {
         token.width,
         token.height,
         token.move_border ?? true,
-        token.shadow ?? false,
+        // border : le jeu demande-t-il une ombre sous ce pion ?
+        token.border ?? false,
         // un pion non orientable n'affiche aucune zone de rotation
         token.orientable ?? false,
         // l'angle atteint avant une sauvegarde de session, s'il y en a une
@@ -155,14 +203,20 @@ function loadComponents(components: SessionComponents | undefined): void {
         backImg,
         // la face affichée quand la partie a été sauvegardée en cours de jeu
         token.side ?? "front",
-        // "transparent" demande d'afficher le pion fantôme sur sa case de départ
+        // "transparent" demande d'afficher le pion fantôme sur sa case d'origine
         token.origin ?? null,
         // case de départ, celle où revient un pion déposé sur son fantôme
         token.initial_x ?? token.x,
         token.initial_y ?? token.y,
+        // où poser le fantôme. Il reprend le x/y d'origine du pion, pas celui de
+        // sa case de départ : le setup et "fixe la position" déplacent la
+        // deuxième, jamais le fantôme.
+        token.origin_x ?? null,
+        token.origin_y ?? null,
       );
-      // l'état du rectangle vient du serveur
-      if (typeof token.border === "boolean") counter.border = token.border;
+      // le rectangle vert vient du serveur ; absent, un pion repositionnable
+      // commence sur sa case de départ
+      if (typeof token.in_place === "boolean") counter.inPlace = token.in_place;
       return counter;
     });
 
@@ -192,8 +246,155 @@ function loadComponents(components: SessionComponents | undefined): void {
   hand = [];
   handAnchor = null;
   hoveredCounter = null;
+  hoveredCounterBox = null;
   clearPending();
   cameraInitialized = false;
+  setupFlipButtons();
+}
+
+// -------------------------------------------------
+// Retournement local d'un plateau
+// -------------------------------------------------
+
+// Un bouton par plateau que le jeu autorise à retourner. Le retournement ne
+// change que la vue de ce joueur : il n'est ni envoyé au serveur ni partagé, un
+// autre écran garde le plateau dans le sens où son joueur le lit.
+interface FlipPlate {
+  board: Board;
+  button: Button;
+}
+
+let flipPlates: FlipPlate[] = [];
+
+function setupFlipButtons(): void {
+  flipPlates = boards
+    .filter((board) => board.flippable)
+    .map((board) => ({
+      board,
+      button: new Button(0, 0, FLIP_BUTTON_WIDTH, FLIP_BUTTON_HEIGHT, "flip", () => {
+        board.flipped = !board.flipped;
+        // un pion en main suit le pointeur à l'écran : son emplacement logique
+        // bascule avec le plateau, sans quoi il saute à l'autre bout de la carte
+        reanchorHand();
+      }),
+    }));
+}
+
+// Reprend les pions en main à l'endroit où ils sont dessinés, après un
+// retournement. Un demi-tour est sa propre inverse : il suffit de leur donner
+// pour position logique celle qui les dessine toujours au même endroit, et les
+// pions restent sous le pointeur au lieu de sauter à l'autre bout du plateau.
+// La translation est la même pour tous, handWorldX et handWorldY restent donc
+// valides.
+function reanchorHand(): void {
+  for (const counter of hand) {
+    const [lx, ly] = displayTopLeft(counter.x, counter.y, counter.width, counter.height);
+    counter.x = lx;
+    counter.y = ly;
+  }
+  // la barre d'info annonce la position logique du pion : elle suit le
+  // retournement, sans attendre le prochain mouvement de souris
+  if (hand.length > 0) counterInfoText = handInfoText();
+}
+
+// Le bouton, à sa place à l'écran. Il est reposé à chaque usage plutôt que figé
+// à la création : le plateau se déplace sous lui quand la caméra zoome ou
+// panoramique, et sa taille est en pixels d'écran alors que son ancre est dans
+// le monde.
+function placeFlipButton(plate: FlipPlate): Button {
+  const [x, y] = worldToScreen(plate.board.x, plate.board.y);
+  plate.button.x = x;
+  plate.button.y = y;
+  return plate.button;
+}
+
+function boardCenter(board: Board): [number, number] {
+  const { width, height } = boardDims(board);
+  return [board.x + width / 2, board.y + height / 2];
+}
+
+// le plateau retourné sous un point, ou null. Les plateaux ne se chevauchent
+// pas : un point appartient à au plus un d'entre eux.
+function flippedBoardAt(x: number, y: number): Board | null {
+  for (const board of boards) {
+    if (!board.flipped) continue;
+    const { width, height } = boardDims(board);
+    if (x >= board.x && x <= board.x + width && y >= board.y && y <= board.y + height) {
+      return board;
+    }
+  }
+  return null;
+}
+
+// Retourne un point de 180° autour du centre du plateau retourné qui le
+// contient. Un demi-tour est sa propre inverse : la même fonction convertit un
+// point de l'écran en point logique, et l'inverse.
+function flipPoint(x: number, y: number): [number, number] {
+  const board = flippedBoardAt(x, y);
+  if (board === null) return [x, y];
+  const [cx, cy] = boardCenter(board);
+  return [2 * cx - x, 2 * cy - y];
+}
+
+// Coin haut-gauche à l'écran du rectangle d'un composant : si son centre tombe
+// sur un plateau retourné, on fait pivoter le rectangle de 180° autour de ce
+// centre. Le composant lui-même reste droit, seule sa place change.
+function displayTopLeft(x: number, y: number, width: number, height: number): [number, number] {
+  const board = flippedBoardAt(x + width / 2, y + height / 2);
+  if (board === null) return [x, y];
+  const [cx, cy] = boardCenter(board);
+  return [2 * cx - (x + width), 2 * cy - (y + height)];
+}
+
+// Le plateau, tel qu'il se lit sur cet écran. Retourné, il pivote de 180° autour
+// de son centre : le rectangle qu'il occupe ne bouge pas, c'est son contenu qui
+// change de sens.
+function drawBoard(board: Board, context: CanvasRenderingContext2D): void {
+  if (!board.image.complete) return;
+
+  const { width, height } = boardDims(board);
+  if (!board.flipped) {
+    context.drawImage(board.image, board.x, board.y, width, height);
+    return;
+  }
+
+  context.save();
+  // le demi-tour se fait autour du coin bas-droit : le dessin repart de (0, 0)
+  context.translate(board.x + width, board.y + height);
+  context.rotate(Math.PI);
+  context.drawImage(board.image, 0, 0, width, height);
+  context.restore();
+}
+
+// Dessine un composant à sa place d'écran, sans toucher au composant : sur un
+// plateau retourné, son rectangle change de coin, mais l'image garde son
+// orientation et l'angle d'un pion reste le sien.
+function drawAtDisplay(
+  context: CanvasRenderingContext2D,
+  x: number,
+  y: number,
+  width: number,
+  height: number,
+  draw: () => void,
+): void {
+  const [dx, dy] = displayTopLeft(x, y, width, height);
+  if (dx === x && dy === y) {
+    draw();
+    return;
+  }
+  context.save();
+  context.translate(dx - x, dy - y);
+  draw();
+  context.restore();
+}
+
+// Un pion à sa place d'écran. Le pion lui-même n'est pas touché : sur un plateau
+// retourné, il change de coin sans pivoter, son angle reste celui que lui a
+// donné le serveur.
+function drawCounterAtDisplay(counter: Counter): void {
+  drawAtDisplay(ctx, counter.x, counter.y, counter.width, counter.height, () => {
+    counter.draw(ctx);
+  });
 }
 
 // le dé sous le pointeur, ou null : contrairement aux pions, un dé se lance
@@ -229,8 +430,10 @@ function applyComponentState(state: ComponentState | undefined): void {
   if (!counter) return;
   counter.x = state.x;
   counter.y = state.y;
-  if (typeof state.border === "boolean") counter.border = state.border;
-  // "fixe la position" déplace la case de départ : le fantôme doit suivre
+  if (typeof state.in_place === "boolean") counter.inPlace = state.in_place;
+  // "fixe la position" déplace la case de départ, donc le retour du pion et son
+  // rectangle vert. Le fantôme reste où le jeu l'a posé : originX/originY sont
+  // figés à l'installation et ne se relisent pas sur un message de position.
   if (typeof state.initial_x === "number") counter.initialX = state.initial_x;
   if (typeof state.initial_y === "number") counter.initialY = state.initial_y;
 }
@@ -289,8 +492,9 @@ function initializeCamera(): void {
 // fantôme d'un pion "transparent" y amène l'écran. On vise le centre du pion,
 // pas son coin, pour qu'il tombe au milieu de la vue.
 function centerCameraOn(counter: Counter): void {
-  cameraX = counter.x + counter.width / 2 - canvas.width / (2 * zoom);
-  cameraY = counter.y + counter.height / 2 - canvas.height / (2 * zoom);
+  const [dx, dy] = displayTopLeft(counter.x, counter.y, counter.width, counter.height);
+  cameraX = dx + counter.width / 2 - canvas.width / (2 * zoom);
+  cameraY = dy + counter.height / 2 - canvas.height / (2 * zoom);
 }
 
 // -------------------------------------------------
@@ -429,6 +633,12 @@ function screenToWorld(sx: number, sy: number): [number, number] {
   return [cameraX + sx / zoom, cameraY + sy / zoom];
 }
 
+// l'inverse : le point du monde tel qu'il apparaît à l'écran. Sert aux boutons
+// "flip", ancrés au plateau mais dessinés en pixels d'écran.
+function worldToScreen(wx: number, wy: number): [number, number] {
+  return [(wx - cameraX) * zoom, (wy - cameraY) * zoom];
+}
+
 function hitCounter(wx: number, wy: number): Counter | null {
   for (let i = counters.length - 1; i >= 0; i -= 1) {
     if (counters[i].contains(wx, wy)) {
@@ -453,6 +663,27 @@ function hitOriginGhost(wx: number, wy: number): Counter | null {
 // le pion sous le pointeur : ses zones de rotation ne s'affichent que pour
 // celui-là, et seulement si la main est vide
 let hoveredCounter: Counter | null = null;
+
+// le compteur survolé : ses zones + et - ne s'affichent que pour lui, et
+// seulement si la main est vide, comme les zones de rotation d'un pion
+let hoveredCounterBox: CounterBox | null = null;
+
+// Le client ne demande qu'un cran : la nouvelle valeur vient du serveur, qui
+// refuse qu'un joueur choisisse le score lui-même.
+function requestCounterValue(box: CounterBox, action: CounterAction): void {
+  const socket = getSocket();
+  if (!socket) return;
+
+  const message = { action, component_id: box.name };
+  socket.send(message);
+  console.log("[WS] Envoyé :", JSON.stringify(message));
+}
+
+function applyCounterValue(message: CounterValueEvent): void {
+  const box = counterBoxesById.get(message.component_id);
+  if (!box) return;
+  box.value = message.value;
+}
 
 function requestRotate(counter: Counter, direction: RotationDirection): void {
   const socket = getSocket();
@@ -527,13 +758,28 @@ function onMouseDown(event: MouseEvent): void {
   const sx = event.offsetX;
   const sy = event.offsetY;
   const [wx, wy] = screenToWorld(sx, sy);
-  lastMouseWorldX = wx;
-  lastMouseWorldY = wy;
 
+  // le bouton "fixe la position" est posé dans le monde, comme les composants
+  // qu'il manipule : il se vise en coordonnées monde. Le bouton "flip", lui, est
+  // dessiné à l'écran et se vise en coordonnées d'écran. Ni l'un ni l'autre ne
+  // dépend du retournement d'un plateau.
   if (!isWatcher && buttonFix && buttonFix.contains(wx, wy)) {
     buttonFix.callback();
     return;
   }
+
+  for (const plate of flipPlates) {
+    if (placeFlipButton(plate).contains(sx, sy)) {
+      plate.button.callback();
+      return;
+    }
+  }
+
+  // un plateau retourné inverse sa carte : le pointeur est ramené dans l'espace
+  // logique avant de tester pions, dés et fantômes
+  const [lx, ly] = flipPoint(wx, wy);
+  lastMouseWorldX = lx;
+  lastMouseWorldY = ly;
 
   // une requête est déjà en attente de réponse du serveur
   if (pending !== null) return;
@@ -541,8 +787,8 @@ function onMouseDown(event: MouseEvent): void {
   // clic sur le fantôme d'un pion "transparent" : la caméra se recentre sur le
   // pion, joueurs comme spectateurs. Le fantôme étant dessiné sous les pions,
   // un pion réel sous le pointeur garde la priorité.
-  if (hitCounter(wx, wy) === null) {
-    const ghost = hitOriginGhost(wx, wy);
+  if (hitCounter(lx, ly) === null) {
+    const ghost = hitOriginGhost(lx, ly);
     if (ghost !== null) {
       centerCameraOn(ghost);
       return;
@@ -554,27 +800,44 @@ function onMouseDown(event: MouseEvent): void {
   // revanche déplacer la caméra comme un joueur, pour suivre la partie.
   if (!isWatcher) {
     // clic sur un dé : il se lance sur place, sans le prendre en main
-    const clickedDice = hitDiceAt(wx, wy);
+    const clickedDice = hitDiceAt(lx, ly);
     if (clickedDice !== null) {
       requestRoll(clickedDice);
       return;
     }
 
+    // clic sur une zone + ou - d'un compteur : demande de changer sa valeur.
+    // Ces zones priment sur le pion, comme les zones de rotation priment sur
+    // la prise en main du pion qu'elles recouvrent.
+    if (hand.length === 0) {
+      const box = hitCounterBox(counterBoxes, lx, ly);
+      const zone = box === null ? null : counterActionZoneAt(box, lx, ly);
+      if (box !== null && zone !== null) {
+        // le signe grise quand la valeur a atteint sa borne : on n'envoie rien,
+        // le serveur refuserait de toute facon. Le clic reste absorbe par le
+        // compteur, il ne doit pas tomber sur le plateau en dessous.
+        if (isActionEnabled(box, zone)) {
+          requestCounterValue(box, zone);
+        }
+        return;
+      }
+    }
+
     // clic sur un composant déjà en main : demande de relâchement
-    const held = hand.find((counter) => counter.contains(wx, wy));
+    const held = hand.find((counter) => counter.contains(lx, ly));
     if (held !== undefined) {
       requestRelease(held);
       return;
     }
 
     // clic sur un pion : demande d'acquisition
-    const hit = hitCounter(wx, wy);
+    const hit = hitCounter(lx, ly);
     if (hit !== null) {
       // avant de le prendre en main, on vérifie si le clic visait une zone de
       // rotation. Ces zones n'existent pas pendant qu'on tient un pion : le
       // repère est déjà occupé par ce qu'on déplace.
       if (hand.length === 0) {
-        const zone = hit.rotationZoneAt(wx, wy);
+        const zone = hit.rotationZoneAt(lx, ly);
         if (zone !== null) {
           requestRotate(hit, zone);
           return;
@@ -597,12 +860,18 @@ function onMouseMove(event: MouseEvent): void {
   const sx = event.offsetX;
   const sy = event.offsetY;
   const [wx, wy] = screenToWorld(sx, sy);
-  lastMouseWorldX = wx;
-  lastMouseWorldY = wy;
+
+  // même conversion que dans onMouseDown : le survol et le déplacement d'un
+  // pion se calculent dans l'espace logique, pas à l'écran
+  const [lx, ly] = flipPoint(wx, wy);
+  lastMouseWorldX = lx;
+  lastMouseWorldY = ly;
 
   // le pion survolé alimente l'affichage des zones de rotation. Il change dès
   // que la main se vide ou se remplit : les zones suivent cette condition.
-  hoveredCounter = isWatcher || hand.length > 0 ? null : hitCounter(wx, wy);
+  const canHover = !isWatcher && hand.length === 0;
+  hoveredCounter = canHover ? hitCounter(lx, ly) : null;
+  hoveredCounterBox = canHover ? hitCounterBox(counterBoxes, lx, ly) : null;
 
   if (panning) {
     cameraX -= (sx - lastMouseX) / zoom;
@@ -613,14 +882,14 @@ function onMouseMove(event: MouseEvent): void {
   }
 
   if (hand.length > 0) {
-    const dx = wx - handWorldX;
-    const dy = wy - handWorldY;
+    const dx = lx - handWorldX;
+    const dy = ly - handWorldY;
     for (const counter of hand) {
       counter.x += dx;
       counter.y += dy;
     }
-    handWorldX = wx;
-    handWorldY = wy;
+    handWorldX = lx;
+    handWorldY = ly;
     movesDirty = true;
     counterInfoText = handInfoText();
   }
@@ -644,10 +913,11 @@ function onDoubleClick(event: MouseEvent): void {
   if (isWatcher) return;
 
   const [wx, wy] = screenToWorld(event.offsetX, event.offsetY);
+  const [lx, ly] = flipPoint(wx, wy);
   // un pion en main a quitté sa case : c'est lui que le pointeur vise, pas ce
   // qui se trouve dessous
-  const held = hand.find((counter) => counter.contains(wx, wy));
-  const hit = held ?? hitCounter(wx, wy);
+  const held = hand.find((counter) => counter.contains(lx, ly));
+  const hit = held ?? hitCounter(lx, ly);
   if (hit === null) return;
 
   requestFlip(hit);
@@ -673,6 +943,8 @@ function onMouseWheel(event: WheelEvent): void {
 
 function draw(): void {
   initializeCamera();
+  // le setup attend que tout soit charge, comme la camera attend les plateaux
+  maybeRequestSetup();
 
   ctx.fillStyle = "gray";
   ctx.fillRect(0, 0, canvas.width, canvas.height);
@@ -688,19 +960,30 @@ function draw(): void {
   );
 
   for (const board of boards) {
-    if (board.image.complete) {
-      const { width, height } = boardDims(board);
-      ctx.drawImage(board.image, board.x, board.y, width, height);
-    }
+    drawBoard(board, ctx);
+  }
+
+  // les compteurs par-dessus le plateau : un cadre et un nombre, que les deux
+  // zones + et - viennent recouvrir
+  for (const box of counterBoxes) {
+    drawAtDisplay(ctx, box.x, box.y, box.width, box.height, () => {
+      drawCounterBox(ctx, box);
+    });
   }
 
   // le bouton de repositionnement est réservé aux joueurs
   if (!isWatcher && buttonFix) buttonFix.draw(ctx);
 
-  // les fantômes de case de départ passent sous les pions, pour que le pion
+  // les fantômes de case d'origine passent sous les pions, pour que le pion
   // réel posé dessus reste lisible
   for (const counter of counters) {
-    counter.drawOriginGhost(ctx);
+    if (!counter.showsOriginGhost) continue;
+    const originX = counter.originX;
+    const originY = counter.originY;
+    if (originX === null || originY === null) continue;
+    drawAtDisplay(ctx, originX, originY, counter.width, counter.height, () => {
+      counter.drawOriginGhost(ctx);
+    });
   }
 
   // les pions sont dessinés dans l'ordre de la liste : un pion plus loin dans
@@ -709,7 +992,7 @@ function draw(): void {
   for (const counter of counters) {
     if (hand.includes(counter)) continue;
     if (counter.image.complete) {
-      counter.draw(ctx);
+      drawCounterAtDisplay(counter);
     }
   }
 
@@ -717,7 +1000,7 @@ function draw(): void {
   // visible, au-dessus des pions non sélectionnés
   for (const counter of hand) {
     if (counter.image.complete) {
-      counter.draw(ctx);
+      drawCounterAtDisplay(counter);
     }
   }
 
@@ -725,22 +1008,46 @@ function draw(): void {
   // pour un joueur, pion orientable, main vide : un pion qu'on s'apprête à
   // saisir n'a pas besoin de ce repère, et un spectateur n'agit pas sur le jeu
   if (!isWatcher && hand.length === 0 && hoveredCounter?.orientable) {
-    hoveredCounter.drawRotationZones(ctx);
+    const counter = hoveredCounter;
+    drawAtDisplay(ctx, counter.x, counter.y, counter.width, counter.height, () => {
+      counter.drawRotationZones(ctx);
+    });
+  }
+
+  // les zones + et - par-dessus le compteur survolé. Comme les zones de
+  // rotation d'un pion, elles ne s'affichent que pour un joueur, main vide : un
+  // spectateur n'agit pas sur le jeu, et la main occupe déjà l'écran
+  if (!isWatcher && hand.length === 0 && hoveredCounterBox !== null) {
+    const box = hoveredCounterBox;
+    drawAtDisplay(ctx, box.x, box.y, box.width, box.height, () => {
+      drawCounterActionZones(ctx, box);
+    });
   }
 
   for (const dice of dices) {
     const image = dice.face();
     if (!image?.complete) continue;
-    ctx.drawImage(image, dice.x, dice.y, dice.width, dice.height);
-    // le dé assombrit pendant son délai : on voit qu'il n'est pas encore
-    // jouable plutôt que de constater qu'un clic a été ignoré
-    if (dice.isLocked()) {
-      ctx.fillStyle = "rgba(0, 0, 0, 0.45)";
-      ctx.fillRect(dice.x, dice.y, dice.width, dice.height);
-    }
+    drawAtDisplay(ctx, dice.x, dice.y, dice.width, dice.height, () => {
+      ctx.drawImage(image, dice.x, dice.y, dice.width, dice.height);
+      // le dé assombrit pendant son délai : on voit qu'il n'est pas encore
+      // jouable plutôt que de constater qu'un clic a été ignoré
+      if (dice.isLocked()) {
+        ctx.fillStyle = "rgba(0, 0, 0, 0.45)";
+        ctx.fillRect(dice.x, dice.y, dice.width, dice.height);
+      }
+    });
   }
 
   ctx.restore();
+
+  // les boutons "flip" par-dessus le jeu, pour rester cliquables même quand un
+  // pion passe sous eux, mais sous le bandeau d'info, comme le bouton "fixe la
+  // position" : le nom du pion sélectionné doit rester lisible d'un bout à
+  // l'autre. Un plateau retourné occupe le même rectangle, son bouton reste
+  // donc au même endroit à l'écran.
+  for (const plate of flipPlates) {
+    placeFlipButton(plate).draw(ctx);
+  }
 
   // barre d'info (écran) : nom + position du pion
   if (counterInfoText) {
@@ -786,8 +1093,12 @@ function handleServerMessage(raw: unknown): void {
       applyRotate(data as unknown as RotateEvent);
     } else if (data.event === "flip") {
       applyFlip(data as unknown as FlipEvent);
+    } else if (data.event === "counter_value") {
+      applyCounterValue(data as unknown as CounterValueEvent);
     } else if (data.event === "fix_positions") {
       applyFixPositions(data as unknown as FixPositionsEvent);
+    } else if (data.event === "setup") {
+      applySetup(data as unknown as SetupEvent);
     } else if (data.event === "session_closed") {
       applySessionClosed();
       // l'owner qui vient de cliquer part sur le lobby, les autres restent
@@ -858,7 +1169,7 @@ function applyRemoteMove(message: MoveEvent): void {
   if (!state) return;
 
   // le rectangle vert est synchronisé même pour celui qui déplace
-  if (typeof state.border === "boolean") counter.border = state.border;
+  if (typeof state.in_place === "boolean") counter.inPlace = state.in_place;
 
   // la position, elle, suit la souris locale tant que le jeton est en main
   if (hand.includes(counter)) return;
@@ -871,6 +1182,91 @@ function applyFixPositions(message: FixPositionsEvent): void {
   for (const component of message.components ?? []) {
     applyComponentState(component);
   }
+}
+
+// -------------------------------------------------
+// Mise en place du jeu
+// -------------------------------------------------
+
+// Le setup attend que tout soit charge. Un pion dont l'image arrive plus tard
+// changerait de place sous les yeux du joueur, et un plateau pas encore connu
+// ferait cadrer la caméra sur un monde qui n'est plus le bon.
+function allComponentsLoaded(): boolean {
+  if (!allBoardsLoaded(boards)) return false;
+  for (const counter of counters) {
+    if (!counter.image.complete) return false;
+  }
+  for (const dice of dices) {
+    for (const face of dice.faces.values()) {
+      if (!face.complete) return false;
+    }
+  }
+  return true;
+}
+
+// Le client ne choisit aucune position : il dit seulement "tout est charge, vous
+// pouvez installer la partie". Le serveur applique son setup, qu'il detient seul,
+// et le diffuse a tous les ecrans, celui qui a demande compris.
+function maybeRequestSetup(): void {
+  if (pendingSetup.length === 0 || setupRequested) return;
+  // un spectateur regarde la partie, il ne l'installe pas
+  if (isWatcher) return;
+  if (!allComponentsLoaded()) return;
+
+  setupRequested = true;
+  getSocket()?.send({ action: "apply_setup" });
+}
+
+// Le setup a ete applique : chaque ecran replace ses composants, quel que soit
+// le genre du composant. Un plateau deplace change le monde a cadrer, donc la
+// camera doit le revoir.
+function applySetup(message: SetupEvent): void {
+  let boardMoved = false;
+
+  for (const state of message.components ?? []) {
+    if (typeof state.x !== "number" || typeof state.y !== "number") continue;
+
+    const board = boards.find((candidate) => candidate.name === state.id);
+    if (board !== undefined) {
+      board.x = state.x;
+      board.y = state.y;
+      boardMoved = true;
+      continue;
+    }
+
+    const token = countersById.get(state.id);
+    if (token !== undefined) {
+      token.x = state.x;
+      token.y = state.y;
+      // la case de depart suit le setup : c'est la que revient le pion et la
+      // que montre le rectangle vert. Le fantome, lui, reste sur sa case
+      // d'origine : on ne touche pas a originX/originY ici.
+      token.initialX = typeof state.initial_x === "number" ? state.initial_x : state.x;
+      token.initialY = typeof state.initial_y === "number" ? state.initial_y : state.y;
+      if (typeof state.in_place === "boolean") token.inPlace = state.in_place;
+      // un pion sans dos garde sa face : le serveur ne l'a pas retournee
+      if (state.side !== undefined) token.setSide(state.side);
+      continue;
+    }
+
+    const box = counterBoxesById.get(state.id);
+    if (box !== undefined) {
+      box.x = state.x;
+      box.y = state.y;
+      continue;
+    }
+
+    const dice = dicesById.get(state.id);
+    if (dice !== undefined) {
+      dice.x = state.x;
+      dice.y = state.y;
+    }
+  }
+
+  if (boardMoved) cameraInitialized = false;
+
+  // le serveur ne renverra plus de setup : la partie est installee
+  pendingSetup = [];
 }
 
 function handleSessionEvent(data: GameServerMessage): void {
@@ -896,6 +1292,14 @@ function handleSessionEvent(data: GameServerMessage): void {
   if (!componentsLoaded) {
     componentsLoaded = true;
     loadComponents(session.components);
+  }
+
+  // le setup en attente n'est lu qu'avec la situation initiale, comme elle. Le
+  // serveur le vide des qu'il est applique : le relire a chaque message de
+  // session ré-armerait la mise en place une seconde fois.
+  if (!setupRead) {
+    setupRead = true;
+    pendingSetup = session.setup ?? [];
   }
 }
 
