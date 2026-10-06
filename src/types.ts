@@ -151,6 +151,13 @@ export interface Session {
    * apres coup ne replace donc rien.
    */
   setup?: SetupEntry[];
+  /**
+   * la partie a-t-elle commencé ? Avant, personne ne prend de pion ; après,
+   * plus aucun nouveau joueur ne peut la rejoindre
+   */
+  started?: boolean;
+  /** joueurs qui ont un siège mais ne sont pas à la table */
+  missing_players?: string[];
 }
 
 /**
@@ -195,6 +202,8 @@ export interface ActiveSession {
   max_watchers?: number;
   /** le créateur a-t-il laissé cette partie ouverte aux spectateurs */
   allows_watchers?: boolean;
+  /** une partie commencée n'accepte plus de nouveau joueur */
+  started?: boolean;
 }
 
 export interface SessionsInfoEvent {
@@ -213,6 +222,15 @@ export interface SessionCreatedEvent {
   // ce client a-t-il créé la partie ? seul l'owner peut la clore. Le serveur
   // en est seul juge : le client ne fait que lire la réponse
   owner?: boolean;
+}
+
+// état de la partie, diffusé à chaque changement : démarrage, joueur qui part
+// ou revient. Un pion ne se prend que si la partie a commencé et que personne
+// ne manque à la table
+export interface SessionStatusEvent {
+  event: "session_status";
+  started: boolean;
+  missing_players: string[];
 }
 
 // la partie a été archivée : plus rien n'y bouge, tout le monde regarde

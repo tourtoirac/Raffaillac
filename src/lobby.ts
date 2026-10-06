@@ -580,7 +580,9 @@ function renderAll(): void {
         const actionCell = document.createElement("td");
         actionCell.className = "join-actions";
 
-        if (!isSessionFull(session)) {
+        // une partie commencée ne prend plus de nouveau joueur : seuls les
+        // pseudos déjà assis peuvent revenir, par leur bouton ci-dessus
+        if (!isSessionFull(session) && !session.started) {
           const joinBtn = document.createElement("button");
           joinBtn.className = "join-session-btn";
           joinBtn.textContent = "Join";

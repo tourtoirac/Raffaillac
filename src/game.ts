@@ -32,6 +32,7 @@ import type {
   Session,
   SessionComponents,
   SessionCreatedEvent,
+  SessionStatusEvent,
   SetupEntry,
   SetupEvent,
   TokenItem,
@@ -128,6 +129,17 @@ let isOwner = false;
 // la partie a été close par son owner : elle est archivée, plus rien n'y bouge
 let isClosed = false;
 
+// la partie a-t-elle commencé, et qui manque à la table ? Le serveur le diffuse
+// à chaque changement ; un pion ne se prend que si elle a commencé et que tous
+// ses joueurs sont là. Le serveur refuse de toute façon un acquire hors de ces
+// conditions : la page ne fait que s'épargner une requête vouée à l'échec.
+let isStarted = false;
+let missingPlayers: string[] = [];
+
+function canAcquire(): boolean {
+  return isStarted && missingPlayers.length === 0;
+}
+
 const sessionInfo = document.getElementById("session-info");
 
 // Le bandeau affiche le jeu et le joueur plutôt que le nom du site : on sait
@@ -149,6 +161,11 @@ function updateSessionInfo(): void {
     sessionInfo.textContent = "Aucune session active";
   } else if (isClosed) {
     sessionInfo.textContent = `Session ${currentSession.key} (partie close)`;
+  } else if (!isStarted) {
+    sessionInfo.textContent = `Session ${currentSession.key} (partie non démarrée)`;
+  } else if (missingPlayers.length > 0) {
+    sessionInfo.textContent =
+      `Session ${currentSession.key} (en attente de : ${missingPlayers.join(", ")})`;
   } else {
     sessionInfo.textContent = `Session ${currentSession.key}`;
   }
@@ -847,6 +864,7 @@ function applyFlip(message: FlipEvent): void {
 }
 
 function requestAcquire(counter: Counter): void {
+  if (!canAcquire()) return;
   const socket = getSocket();
   if (!socket) return;
 
@@ -1276,6 +1294,8 @@ function handleServerMessage(raw: unknown): void {
       applyFixPositions(data as unknown as FixPositionsEvent);
     } else if (data.event === "setup") {
       applySetup(data as unknown as SetupEvent);
+    } else if (data.event === "session_status") {
+      applySessionStatus(data as unknown as SessionStatusEvent);
     } else if (data.event === "session_closed") {
       applySessionClosed();
       // l'owner qui vient de cliquer part sur le lobby, les autres restent
@@ -1312,9 +1332,49 @@ const DEAD_SESSION_ERRORS = ["session_not_found", "no_session"];
 
 let leavingDeadSession = false;
 
+// refus d'un acquire : la partie n'a pas commencé ou un joueur manque. La
+// requête en vol n'aura pas de réponse, la main doit se libérer tout de suite.
+const ACQUIRE_ERRORS = ["session_not_started", "players_missing"];
+
+// refus du démarrage : le bouton redevient cliquable
+const START_ERRORS = [
+  "not_session_owner",
+  "session_already_started",
+  "session_start_not_stored",
+  "watcher_not_allowed",
+];
+
 function reportServerError(data: ServerErrorEvent): void {
   const code = data.error?.code;
   console.warn("[WS] Erreur du serveur :", code, data.error?.message);
+
+  if (code && ACQUIRE_ERRORS.includes(code)) {
+    clearPending();
+    return;
+  }
+
+  if (code && START_ERRORS.includes(code)) {
+    pendingStart = false;
+    updateLeaveLinks();
+    if (code !== "session_already_started") {
+      window.alert(data.error?.message ?? "La partie n'a pas pu être démarrée.");
+    }
+    return;
+  }
+
+  // la partie a commencé sans ce pseudo : il n'y a pas de siège, on ne peut que
+  // revenir au lobby, pour la regarder en spectateur par exemple
+  if (code === "session_started") {
+    if (leavingDeadSession) return;
+    leavingDeadSession = true;
+    clearSession();
+    window.alert(
+      "Cette partie a commencé sans toi.\n\n" +
+        "Tu reviens au lobby : tu peux la regarder en spectateur.",
+    );
+    window.location.href = leaveUrl;
+    return;
+  }
 
   if (code && DEAD_SESSION_ERRORS.includes(code)) {
     if (leavingDeadSession) return;
@@ -1456,6 +1516,8 @@ function handleSessionEvent(data: GameServerMessage): void {
   const event = data as unknown as SessionCreatedEvent;
   if (event.role) isWatcher = event.role === "watcher";
   if (typeof event.owner === "boolean") isOwner = event.owner;
+  if (typeof session.started === "boolean") isStarted = session.started;
+  if (Array.isArray(session.missing_players)) missingPlayers = session.missing_players;
   updateLeaveLinks();
 
   currentSession = session;
@@ -1478,6 +1540,15 @@ function handleSessionEvent(data: GameServerMessage): void {
     setupRead = true;
     pendingSetup = session.setup ?? [];
   }
+}
+
+// Le serveur annonce l'état de la partie : démarrée ou non, et qui manque.
+function applySessionStatus(message: SessionStatusEvent): void {
+  isStarted = message.started;
+  missingPlayers = message.missing_players ?? [];
+  if (isStarted) pendingStart = false;
+  updateLeaveLinks();
+  updateSessionInfo();
 }
 
 // La partie a été archivée par son owner. Les joueurs restants deviennent des
@@ -1514,9 +1585,46 @@ if (backLink) {
 // de session, cette page se contente de le montrer ou de le cacher.
 const closeLink = document.getElementById("close-link");
 
+// Le bouton de démarrage n'est proposé qu'à l'owner, tant que la partie n'a pas
+// commencé. Le serveur vérifie lui aussi l'owner : la page ne fait que suivre ce
+// qu'il annonce. Une fois cliqué, le bouton attend la réponse du serveur.
+const startLink = document.getElementById("start-link") as HTMLButtonElement | null;
+
+// une demande de démarrage est-elle en vol ?
+let pendingStart = false;
+
 function updateLeaveLinks(): void {
+  if (startLink) {
+    startLink.hidden = !isOwner || isStarted || isWatcher || isClosed;
+    startLink.disabled = pendingStart;
+  }
   if (!closeLink) return;
   closeLink.hidden = !isOwner || isClosed;
+}
+
+function onStartSession(): void {
+  if (pendingStart || isStarted) return;
+  if (!window.confirm(
+    "Démarrer la partie ?\n\n" +
+      "Plus aucun nouveau joueur ne pourra la rejoindre.",
+  )) {
+    return;
+  }
+
+  const socket = getSocket();
+  if (!socket) {
+    window.alert("Connexion au serveur impossible : la partie n'est pas démarrée.");
+    return;
+  }
+
+  pendingStart = true;
+  updateLeaveLinks();
+  socket.send({ action: "start_session" });
+  console.log("[WS] Envoyé :", JSON.stringify({ action: "start_session" }));
+}
+
+if (startLink) {
+  startLink.addEventListener("click", onStartSession);
 }
 
 // l'owner a-t-il demandé la clôture ? c'est lui, et lui seul, qui part sur le
