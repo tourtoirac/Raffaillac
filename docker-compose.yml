@@ -7,17 +7,11 @@ services:
     ports:
       # Port exposé du service frontend (nginx)
       - "8080:80"
-    environment:
-      # Adresse de l'API WebSocket / HTTP Chabanas
-      CHABANAS_URL: ${CHABANAS_URL:-http://chabanas:80}
-      CHABANAS_MAX_RETRIES: ${CHABANAS_MAX_RETRIES:-30}
-      CHABANAS_RETRY_INTERVAL: ${CHABANAS_RETRY_INTERVAL:-2}
     volumes:
       # Ressources de jeu montées depuis le dépôt (plateaux, pions, règles)
       - ./Games:/usr/share/nginx/html/Games:ro
 
   # Backend Chabanas : à activer/paramétrer selon votre déploiement.
-  # Le service frontend attend chabanas:80 via CHABANAS_URL.
   # chabanas:
   #   image: <image-chabanas>
   #   container_name: obg-chabanas
