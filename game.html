@@ -35,17 +35,36 @@
     header .game-title {
       font-size: 16px;
     }
-    a.back {
+    /* Les actions du bandeau sont des boutons et non des liens : elles ne
+       mènent nulle part, elles agissent sur la page. */
+    button.back {
+      font: inherit;
+      font-size: 14px;
       color: #ffd700;
-      text-decoration: none;
+      background: transparent;
+      /* la bordure prend la couleur du texte : un bouton rouge le reste sans
+         avoir à répéter la règle */
+      border: 1px solid currentColor;
+      border-radius: 4px;
+      padding: 4px 10px;
+      cursor: pointer;
+    }
+    button.back:hover {
+      background: rgba(255, 255, 255, 0.08);
+    }
+    button.back:disabled {
+      opacity: 0.5;
+      cursor: progress;
     }
     .back-links {
       display: flex;
-      gap: 16px;
-      align-items: baseline;
+      gap: 10px;
+      align-items: center;
+      justify-content: flex-end;
+      flex-wrap: wrap;
     }
     /* la clôture est définitive : elle vide le code de la partie */
-    a.back.danger {
+    button.back.danger {
       color: #ff8a80;
     }
     #game-wrapper {
@@ -70,9 +89,10 @@
     <span class="game-title" id="game-title">Online Boardgames</span>
     <span class="session-info" id="session-info"></span>
     <span class="back-links">
-      <a class="back" id="back-link" href="index.html">&larr; Quitter et reprendre plus tard</a>
+      <button type="button" class="back" id="screenshot-link">Copie d'écran</button>
+      <button type="button" class="back" id="back-link">&larr; Quitter et reprendre plus tard</button>
       <!-- visible pour l'owner seul : le serveur le décide, pas cette page -->
-      <a class="back danger" id="close-link" href="index.html" hidden>Clore la partie et quitter</a>
+      <button type="button" class="back danger" id="close-link" hidden>Clore la partie et quitter</button>
     </span>
   </header>
 

@@ -1496,20 +1496,23 @@ function applySessionClosed(): void {
 // Initialisation
 // -------------------------------------------------
 
-// le lien de retour ramène sur l'onglet du jeu d'origine ; repli index.html
-// si la page a été ouverte sans paramètre (lien direct, marque-page)
+// Le bouton de retour ramène sur l'onglet du jeu d'origine ; repli index.html
+// si la page a été ouverte sans paramètre (lien direct, marque-page). Un bouton
+// n'a pas de href : c'est le clic qui porte la navigation.
 const leaveUrl = lobbyReturnUrl(originGameName());
-const backLink = document.getElementById("back-link") as HTMLAnchorElement | null;
-if (backLink) {
-  backLink.href = leaveUrl;
+
+function goToLobby(): void {
+  window.location.assign(leaveUrl);
 }
 
-// Le second lien n'existe que pour l'owner : le serveur le dit dans l'événement
-// de session, cette page se contente de le montrer ou de le cacher.
-const closeLink = document.getElementById("close-link") as HTMLAnchorElement | null;
-if (closeLink) {
-  closeLink.href = leaveUrl;
+const backLink = document.getElementById("back-link");
+if (backLink) {
+  backLink.addEventListener("click", goToLobby);
 }
+
+// Le second bouton n'existe que pour l'owner : le serveur le dit dans l'événement
+// de session, cette page se contente de le montrer ou de le cacher.
+const closeLink = document.getElementById("close-link");
 
 function updateLeaveLinks(): void {
   if (!closeLink) return;
@@ -1520,10 +1523,7 @@ function updateLeaveLinks(): void {
 // lobby une fois la partie archivée
 let pendingClose = false;
 
-function onCloseSession(event: MouseEvent): void {
-  // le lien reste une ancre de secours si le serveur ne répond jamais
-  event.preventDefault();
-
+function onCloseSession(): void {
   if (!window.confirm(
     "Clore la partie ?\n\n" +
       "Elle sera archivée et ne pourra plus être rejouée. " +
@@ -1546,6 +1546,73 @@ function onCloseSession(event: MouseEvent): void {
 if (closeLink) {
   closeLink.hidden = true;
   closeLink.addEventListener("click", onCloseSession);
+}
+
+// -------------------------------------------------
+// Copie d'écran
+// -------------------------------------------------
+
+// Le nom du fichier vient de l'URL et n'est donc pas maîtrisé : on n'en garde
+// que ce qui est sûr dans un nom de fichier, pour ne pas produire un nom que le
+// navigateur tronque ou refuse.
+function screenshotFilename(): string {
+  const game = (originGameName() ?? "partie").replace(/[^A-Za-z0-9_-]+/g, "-").replace(/^-+|-+$/g, "");
+  // deux parties lancées dans la même seconde ne doivent pas s'écraser
+  const stamp = new Date().toISOString().replace(/[:.]/g, "-").slice(0, 19);
+  return `obg-${game || "partie"}-${stamp}.png`;
+}
+
+// Un canvas est une surface DrawingML : la seule façon de la photographier
+// depuis la page est de la redessiner ailleurs. On récupère ce qu'on peut — le
+// contenu réellement affiché, dans la résolution réellement affichée, donc sans
+// le bandeau ni la bordure du canvas.
+async function downloadScreenshot(): Promise<void> {
+  let blob: Blob | null = null;
+  try {
+    // toBlob est asynchrone et rend la main à la boucle de jeu : l'image
+    // capturée est l'image encodée au moment de l'appel, pas celle qui passera
+    // à l'écran une frame plus tard.
+    blob = await new Promise<Blob | null>((resolve) => {
+      canvas.toBlob(resolve, "image/png");
+    });
+  } catch (error) {
+    // Un canvas pollué — une image du jeu servie depuis un autre domaine — fait
+    // jeter toBlob. Le joueur doit l'apprendre : sans quoi il reclique et
+    // croirait à un bouton cassé.
+    console.warn("[capture] Capture impossible", error);
+  }
+
+  if (blob === null) {
+    window.alert(
+      "Copie d'écran impossible.\n\n" +
+        "Les images du jeu sont peut-être servies depuis un autre domaine, " +
+        "ce qui interdit au navigateur de les lire.",
+    );
+    return;
+  }
+
+  // Le lien est jetable : il ne rejoint pas le document, il ne sert qu'à
+  // déclencher le téléchargement.
+  const link = document.createElement("a");
+  link.href = URL.createObjectURL(blob);
+  link.download = screenshotFilename();
+  link.click();
+  // Libérer l'URL trop tôt annulerait le téléchargement dans certains
+  // navigateurs : le clic n'a pas encore été pris en compte.
+  setTimeout(() => URL.revokeObjectURL(link.href), 0);
+}
+
+const screenshotLink = document.getElementById("screenshot-link") as HTMLButtonElement | null;
+if (screenshotLink) {
+  screenshotLink.addEventListener("click", () => {
+    // L'encodage d'une grande surface prend une fraction de seconde : sans ça,
+    // deux clics rapides lancent deux téléchargements et le second échoue.
+    if (screenshotLink.disabled) return;
+    screenshotLink.disabled = true;
+    void downloadScreenshot().finally(() => {
+      screenshotLink.disabled = false;
+    });
+  });
 }
 
 loadComponents(currentSession?.components);
