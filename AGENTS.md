@@ -44,16 +44,99 @@ prétendre avoir couvert une régression. La seule vérification possible est
 
 | Fichier            | Rôle |
 | ------------------ | ---- |
-| `game.ts`          | Orchestrateur principal (~1400 lignes) |
+| `game.ts`          | Page de jeu : état, canvas, souris, messages serveur (~1 700 lignes) |
+| `lobby.ts`         | Page de lobby : onglets de jeux, tables, modales créer/rejoindre (~700 lignes) |
 | `types.ts`         | Contrat de protocole — lire en premier |
-| `engine/board.ts` `button.ts` `counter.ts` `counter_box.ts` `dice.ts` | Rendu des composants |
-| `ws/wsClient.ts` `wsWorker.ts` | WebSocket, exécuté dans un **Worker** |
-| `lobby.ts` `navigation.ts` `session.ts` | Lobby et navigation |
+| `engine/board.ts` `button.ts` `counter.ts` `counter_box.ts` `dice.ts` | Modèle et dessin des composants |
+| `ws/wsClient.ts` `wsWorker.ts` | WebSocket, exécuté dans un **SharedWorker** |
+| `navigation.ts`    | URL `index.html` ↔ `game.html`, avec `?game=<nom>` pour garder l'onglet |
+| `session.ts`       | `sessionStorage` : session courante (`obg_session`) et identité (`obg_player_identity`) |
 
-`game.ts` est très gros et mélange orchestration et rendu : s'y repérer avant
-d'ajouter une fonctionnalité.
+Deux points d'entrée HTML distincts : `index.html` → `src/lobby.ts`, et
+`game.html` → `src/game.ts` (déclarés tous deux dans `vite.config.ts`). Le
+balisage et le CSS sont **dans les fichiers HTML** (`index.html` fait environ
+460 lignes) ; les modules TS récupèrent les éléments par `getElementById`.
 
-Deux points d'entrée HTML distincts : `index.html` (lobby) et `game.html` (partie).
+## Carte du code
+
+### Correspondance des noms avec Tourtoirac
+
+Les noms ne correspondent pas : c'est le piège principal.
+
+| `kind` du `game_json` | Tourtoirac | Raffaillac | Type dans `types.ts` |
+| --------------------- | ---------- | ---------- | -------------------- |
+| `board`   | `Board`   | `Board` (interface, `engine/board.ts`) | `BoardItem` |
+| `token`   | `Token`   | **`Counter`** (classe, `engine/counter.ts`) | `TokenItem` |
+| `counter` | `Counter` | **`CounterBox`** (interface, `engine/counter_box.ts`) | `CounterItem` |
+| `dice`    | `Dice`    | `Dice` (classe, `engine/dice.ts`) | `DiceItem` |
+
+Dans `game.ts`, `counters` / `countersById` / `hand` désignent donc des
+**pions**, et `counterBoxes` des compteurs numériques. Partout, l'identifiant
+du composant s'appelle `name` côté client et `id` / `component_id` côté
+serveur.
+
+### Connexion
+
+- `ws/wsWorker.ts` est un **SharedWorker** : une seule WebSocket est partagée
+  par tous les onglets de la même origine. Il lit `/conf.json` (`host`, `port`)
+  et se reconnecte avec un délai exponentiel plafonné à 15 s.
+- `ws/wsClient.ts` expose `getSocket()` → `{send, setMessageHandler,
+  setStateHandler}`, en singleton sur `window.obgSocket`. Les messages reçus
+  avant `setMessageHandler` sont mis en tampon.
+- Le navigateur **ne parle qu'à Tourtoirac**. Aucun appel HTTP vers Chabanas
+  (les seuls `fetch` lisent `conf.json`).
+
+### Parcours d'un joueur
+
+1. **`lobby.ts` → `main()`** : lit `conf.json`, puis à la connexion envoie
+   `list_game`. À la réponse, il envoie `list_sessions` et rafraîchit sur
+   chaque `session_players_changed`.
+2. Modale de création ou d'adhésion → `create_session` / `join_session`.
+   L'identité est stockée avant même la réponse (`storePlayerIdentity`).
+3. **`session_joined`** → `storeSession()` puis redirection vers
+   `game.html?game=<nom>`.
+4. **`game.ts`** relit la session depuis `sessionStorage`. À chaque
+   (re)connexion, il envoie `resume_session` (`session_key`, `session_code`,
+   `nickname`, `role`), car la page de jeu a une nouvelle connexion côté
+   serveur.
+5. `session_joined` → `handleSessionEvent` → `loadComponents()` (une seule
+   fois) et lecture du `setup` en attente.
+6. Une fois toutes les images chargées, `maybeRequestSetup()` envoie
+   `apply_setup` (joueurs seulement) ; l'événement `setup` → `applySetup`.
+
+### `game.ts` par section
+
+Le fichier est découpé par des bandeaux `// ----` ; on les cherche par leur
+titre :
+
+| Section | Contenu |
+| ------- | ------- |
+| *Situation initiale* | `loadComponents` : `fixed` → `boards` + `counterBoxes`, `movable` → `counters` (pions), `dice` → `dices` |
+| *Retournement local d'un plateau* | Retournement à 180° **local au joueur** (jamais envoyé au serveur) |
+| *Caméra*, *Défilement au bord* | `cameraX/Y`, `zoom`, `screenToWorld` / `worldToScreen`, défilement au bord de l'écran |
+| *Main* | `hand` (pions tenus), `pending` (requête `acquire`/`release` en vol, délai `RESPONSE_TIMEOUT`), `flushMoves` |
+| *Souris* | `onMouseDown` / `Move` / `Up` : clic sur une zone de rotation, de compteur, de dé ou d'un pion → `request*` |
+| *Dessin* | `draw()` : plateaux, compteurs, dés, pions, boutons, infobulles |
+| *Messages du serveur Tourtoirac* | `handleServerMessage` : une branche `if/else` par `event` → fonctions `apply*` |
+| *Mise en place du jeu* | `allComponentsLoaded`, `maybeRequestSetup`, `applySetup`, `handleSessionEvent` |
+| *Initialisation* | Liens retour au lobby et clôture (owner), `onCloseSession` |
+| *Boucle du jeu*, *Événements* | `requestAnimationFrame(gameLoop)` : défilement, `draw`, `flushMoves` ; écouteurs canvas |
+
+Convention : `requestX()` envoie l'action, `applyX(event)` applique la
+réponse diffusée. Le client n'applique **rien** de manière optimiste, sauf le
+déplacement d'un pion tenu (envoyé à chaque frame par `flushMoves`) et le
+retournement local d'un plateau.
+
+### Ajouter un type de composant
+
+1. `types.ts` : interface `XxxItem` avec `kind: "xxx"`, à ajouter à
+   `SessionComponents`.
+2. `engine/xxx.ts` : modèle et dessin.
+3. `game.ts` : chargement dans `loadComponents`, dessin dans `draw`, clic dans
+   `onMouseDown`, chargement des images dans `allComponentsLoaded` (sinon le
+   setup part trop tôt).
+4. Tourtoirac : `case` dans `Session.load_session_components`, classe dans
+   `Components/`.
 
 ## `Games/` n'est pas versionné
 
@@ -67,14 +150,14 @@ chercher de références.
 ## Docker
 
 Multi-étapes : build `node:20-alpine` (`npm ci` puis `npm run build`), puis
-`nginx:alpine` qui sert `dist/`. `EXPOSE 80`, `CMD ["/entrypoint.sh"]`.
+`nginx:alpine` qui sert `dist/`. `EXPOSE 80`, avec le `CMD` par défaut de
+l'image nginx.
 
-`entrypoint.sh` **refuse de démarrer nginx tant que Chabanas ne répond pas** :
-il interroge `POST ${CHABANAS_URL}/game/list` avec
-`{"game_name_list":["Waterloo"]}`, réessaie `CHABANAS_MAX_RETRIES` fois
-(30) toutes les `CHABANAS_RETRY_INTERVAL` secondes (2), puis sort en erreur.
-Un conteneur qui refuse de démarrer est donc souvent un back-end injoignable, pas
-un problème de build.
+Le conteneur ne dépend d'**aucun** autre service : il ne sert que des fichiers
+statiques et démarre même si Chabanas ou Tourtoirac sont arrêtés. C'est
+Tourtoirac qui attend Chabanas avant d'accepter des connexions (voir
+`Tourtoirac/AGENTS.md` § Démarrage). Ne pas réintroduire de vérification de
+Chabanas ici : le navigateur ne lui parle jamais.
 
 `docker-compose.yml` : service `raffaillac`, port hôte `8080:80`. Le service
 `chabanas` y est commenté et à activer selon le déploiement.
