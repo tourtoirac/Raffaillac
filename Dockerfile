@@ -20,8 +20,7 @@ RUN rm -rf /usr/share/nginx/html/*
 
 COPY --from=build /app/dist /usr/share/nginx/html/
 
-# Ressources de jeu (plateaux, pions, règles) aux mêmes chemins qu'à l'origine
-COPY Games/ /usr/share/nginx/html/Games/
+# Game resources (Games/) are mounted as a volume at /usr/share/nginx/html/Games
 
 EXPOSE 80
 

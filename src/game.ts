@@ -59,6 +59,12 @@ const FIX_BUTTON_HEIGHT = 40;
 // dans le monde feraient 5 px à l'écran.
 const FLIP_BUTTON_WIDTH = 70;
 const FLIP_BUTTON_HEIGHT = 26;
+// Stack preview: popup listing every counter under the pointer when there is
+// more than one. Distances are in screen pixels; counters inside it are drawn
+// at the main view's zoom.
+const STACK_PREVIEW_OFFSET = 50;
+const STACK_PREVIEW_PADDING = 10;
+const STACK_PREVIEW_GAP = 10;
 
 // ---------------------------------------------
 // Défilement de la caméra au bord de l'écran
@@ -996,6 +1002,9 @@ function onMouseDown(event: MouseEvent): void {
 function onMouseMove(event: MouseEvent): void {
   const sx = event.offsetX;
   const sy = event.offsetY;
+  pointerOnCanvas = true;
+  pointerScreenX = sx;
+  pointerScreenY = sy;
 
   // Le défilement de la caméra a ses propres règles de déclenchement, alors que
   // ce gestionnaire s'interrompt dès qu'un pion est en main. Il est donc appelé
@@ -1046,6 +1055,109 @@ function onMouseUp(): void {
   panning = false;
 }
 
+// -------------------------------------------------
+// Stack preview
+// -------------------------------------------------
+
+// Pointer position on the canvas, in screen pixels. The preview is recomputed
+// every frame from it, so it follows panning, zooming and remote moves.
+let pointerOnCanvas = false;
+let pointerScreenX = 0;
+let pointerScreenY = 0;
+
+// every counter under (wx, wy), bottom of the stack first
+function countersAt(wx: number, wy: number): Counter[] {
+  return counters.filter((counter) => counter.contains(wx, wy));
+}
+
+// screen-space bounding box of a counter at the current zoom, rotation included
+function previewCellSize(counter: Counter): [number, number] {
+  const angle = (counter.orientation * Math.PI) / 180;
+  const cos = Math.abs(Math.cos(angle));
+  const sin = Math.abs(Math.sin(angle));
+  return [
+    (counter.width * cos + counter.height * sin) * zoom,
+    (counter.width * sin + counter.height * cos) * zoom,
+  ];
+}
+
+/**
+ * Draws, in screen space, a popup holding every counter under the pointer when
+ * at least two overlap there. Counters keep their stacking order (left to
+ * right, then top to bottom), their face and their orientation.
+ */
+function drawStackPreview(): void {
+  // while dragging, the held counters are the ones under the pointer
+  if (!pointerOnCanvas || panning || hand.length > 0) return;
+
+  const [wx, wy] = screenToWorld(pointerScreenX, pointerScreenY);
+  const [lx, ly] = flipPoint(wx, wy);
+  const stack = countersAt(lx, ly).filter((counter) => counter.image.complete);
+  if (stack.length < 2) return;
+
+  // uniform cells, sized on the largest counter of the stack
+  let cellWidth = 0;
+  let cellHeight = 0;
+  for (const counter of stack) {
+    const [w, h] = previewCellSize(counter);
+    cellWidth = Math.max(cellWidth, w);
+    cellHeight = Math.max(cellHeight, h);
+  }
+
+  // as many columns as fit beside the pointer, wrapping to new rows otherwise
+  const roomRight = canvas.width - pointerScreenX - STACK_PREVIEW_OFFSET;
+  const roomLeft = pointerScreenX - STACK_PREVIEW_OFFSET;
+  const room = Math.max(roomRight, roomLeft) - 2 * STACK_PREVIEW_PADDING;
+  const maxColumns = Math.max(1, Math.floor((room + STACK_PREVIEW_GAP) / (cellWidth + STACK_PREVIEW_GAP)));
+  const columns = Math.min(stack.length, maxColumns);
+  const rows = Math.ceil(stack.length / columns);
+
+  const popupWidth = columns * cellWidth + (columns - 1) * STACK_PREVIEW_GAP + 2 * STACK_PREVIEW_PADDING;
+  const popupHeight = rows * cellHeight + (rows - 1) * STACK_PREVIEW_GAP + 2 * STACK_PREVIEW_PADDING;
+
+  // to the right of the pointer, or to its left when it would not fit
+  let popupX = pointerScreenX + STACK_PREVIEW_OFFSET;
+  if (popupX + popupWidth > canvas.width && roomLeft > roomRight) {
+    popupX = pointerScreenX - STACK_PREVIEW_OFFSET - popupWidth;
+  }
+  // vertically centered on the pointer, kept inside the canvas
+  let popupY = pointerScreenY - popupHeight / 2;
+  popupY = Math.max(0, Math.min(canvas.height - popupHeight, popupY));
+
+  ctx.save();
+  ctx.fillStyle = "rgba(30, 30, 30, 0.92)";
+  ctx.fillRect(popupX, popupY, popupWidth, popupHeight);
+  ctx.lineWidth = 2;
+  ctx.strokeStyle = "#ffd700";
+  ctx.strokeRect(popupX, popupY, popupWidth, popupHeight);
+
+  // clip so a counter shadow or border never spills out of the popup
+  ctx.beginPath();
+  ctx.rect(popupX, popupY, popupWidth, popupHeight);
+  ctx.clip();
+
+  stack.forEach((counter, index) => {
+    const column = index % columns;
+    const row = Math.floor(index / columns);
+    const cellX = popupX + STACK_PREVIEW_PADDING + column * (cellWidth + STACK_PREVIEW_GAP);
+    const cellY = popupY + STACK_PREVIEW_PADDING + row * (cellHeight + STACK_PREVIEW_GAP);
+    // the counter center lands on the cell center: rotation is around it
+    const centerX = cellX + cellWidth / 2;
+    const centerY = cellY + cellHeight / 2;
+    ctx.setTransform(
+      zoom,
+      0,
+      0,
+      zoom,
+      centerX - (counter.x + counter.width / 2) * zoom,
+      centerY - (counter.y + counter.height / 2) * zoom,
+    );
+    counter.draw(ctx);
+  });
+
+  ctx.restore();
+}
+
 // Un pointeur qui quitte le canvas ne peut plus s'en éloigner : le seul signal
 // qu'il enverra pour arrêter est son retour. Sans cette remise à zéro, la carte
 // continuerait de défiler indéfiniment, et le joueur n'aurait plus le moyen de
@@ -1053,6 +1165,7 @@ function onMouseUp(): void {
 // repart au retour, avec son délai d'entrée.
 function onMouseLeave(): void {
   edgeInside = false;
+  pointerOnCanvas = false;
   onMouseUp();
 }
 
@@ -1243,6 +1356,9 @@ function draw(): void {
   for (const plate of flipPlates) {
     placeFlipButton(plate).draw(ctx);
   }
+
+  // above the game and the flip buttons, below the info bar
+  drawStackPreview();
 
   // barre d'info (écran) : nom + position du pion
   if (counterInfoText) {
