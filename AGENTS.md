@@ -84,13 +84,14 @@ serveur.
   setStateHandler}`, en singleton sur `window.obgSocket`. Les messages reçus
   avant `setMessageHandler` sont mis en tampon.
 - Le navigateur **ne parle qu'à Tourtoirac**. Aucun appel HTTP vers Chabanas
-  (les seuls `fetch` lisent `conf.json`).
+  (le seul `fetch` est celui de `conf.json` par `wsWorker.ts`).
 
 ### Parcours d'un joueur
 
-1. **`lobby.ts` → `main()`** : lit `conf.json`, puis à la connexion envoie
-   `list_game`. À la réponse, il envoie `list_sessions` et rafraîchit sur
-   chaque `session_players_changed`.
+1. **`lobby.ts` → `main()`** : à la connexion envoie `list_game`, sans
+   liste de jeux : c'est Chabanas qui fournit son catalogue actif, et un onglet
+   est affiché par jeu présent dans `sessions_info`. À la réponse, il envoie
+   `list_sessions` et rafraîchit sur chaque `session_players_changed`.
 2. Modale de création ou d'adhésion → `create_session` / `join_session`.
    L'identité est stockée avant même la réponse (`storePlayerIdentity`).
 3. **`session_joined`** → `storeSession()` puis redirection vers

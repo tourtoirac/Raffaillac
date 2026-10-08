@@ -142,8 +142,18 @@ let isClosed = false;
 let isStarted = false;
 let missingPlayers: string[] = [];
 
-function canAcquire(): boolean {
-  return isStarted && missingPlayers.length === 0;
+// Tells the player why clicking a component does nothing before the game has
+// started, instead of silently ignoring the click.
+function warnGameNotStarted(): void {
+  window.alert(
+    "Vous ne pouvez pas sélectionner de composants dans le jeu tant qu'il n'est " +
+      "pas démarré. Cliquez sur le bouton Démarrer la session pour commencer à jouer",
+  );
+}
+
+// Same for a started game waiting for a seated player to come back.
+function warnPlayersMissing(): void {
+  window.alert("Tous les joueurs doivent être présents pour pouvoir modifier la table de jeu");
 }
 
 const sessionInfo = document.getElementById("session-info");
@@ -870,7 +880,14 @@ function applyFlip(message: FlipEvent): void {
 }
 
 function requestAcquire(counter: Counter): void {
-  if (!canAcquire()) return;
+  if (!isStarted) {
+    warnGameNotStarted();
+    return;
+  }
+  if (missingPlayers.length > 0) {
+    warnPlayersMissing();
+    return;
+  }
   const socket = getSocket();
   if (!socket) return;
 
@@ -1466,6 +1483,9 @@ function reportServerError(data: ServerErrorEvent): void {
 
   if (code && ACQUIRE_ERRORS.includes(code)) {
     clearPending();
+    // the local state may lag behind the server: the refusal is shown anyway
+    if (code === "session_not_started") warnGameNotStarted();
+    if (code === "players_missing") warnPlayersMissing();
     return;
   }
 

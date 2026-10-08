@@ -1,7 +1,6 @@
 export interface AppConfig {
   host: string;
   port: number;
-  game_name_list: string[];
 }
 
 export interface BoardItem {

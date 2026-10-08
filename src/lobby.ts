@@ -2,7 +2,6 @@ import { gameEntryUrl } from "./navigation";
 import { storePlayerIdentity, storeSession } from "./session";
 import type {
   ActiveSession,
-  AppConfig,
   GameInfo,
   ListGameEvent,
   Session,
@@ -28,7 +27,6 @@ const statusElement = document.getElementById("status") as HTMLDivElement;
 const tabsContainer = document.getElementById("tabs-container") as HTMLDivElement;
 const tablesContainer = document.getElementById("tables-container") as HTMLDivElement;
 
-let config: AppConfig | null = null;
 let gameInfo: Record<string, GameInfo> = {};
 let sessionsData: Record<string, ActiveSession[]> = {};
 
@@ -54,12 +52,9 @@ function selectedGameIndex(gameNames: string[]): number {
   return 0;
 }
 
-// seuls les jeux présents dans sessions_info sont affichés
+// The server decides which games are offered: one tab per game of sessions_info
 function visibleGameNames(): string[] {
-  if (!config) return [];
-  return [...config.game_name_list]
-    .filter((name) => name in sessionsData)
-    .sort((a, b) => a.localeCompare(b));
+  return Object.keys(sessionsData).sort((a, b) => a.localeCompare(b));
 }
 
 // nom du jeu réellement affiché : selectedGame peut être absent de la liste
@@ -153,10 +148,7 @@ function connectSharedSocket(): void {
       return;
     }
     pushStatus("Connecté au serveur. Chargement des jeux...");
-    socket.send({
-      action: "list_game",
-      game_name_list: config?.game_name_list ?? [],
-    });
+    socket.send({ action: "list_game" });
   });
 
   socket.setMessageHandler((raw) => {
@@ -165,10 +157,7 @@ function connectSharedSocket(): void {
 }
 
 function refreshSessions(): void {
-  getSocket()?.send({
-    action: "list_sessions",
-    game_name_list: config?.game_name_list ?? [],
-  });
+  getSocket()?.send({ action: "list_sessions" });
 }
 
 function handleServerMessage(data: ServerMessage): void {
@@ -190,6 +179,14 @@ function handleServerMessage(data: ServerMessage): void {
       if (code && REFUSAL_CODES.has(code)) {
         reopenJoinModalAfterRefusal(code);
         lastJoinAttempt = null;
+      } else if (code === "duplicate_component_ids") {
+        // The game_json is broken, not the player's input: nothing to retry,
+        // so the creation modal stays closed and the player is told why.
+        openingGameName = null;
+        window.alert(
+          "Impossible de lancer la partie : plusieurs composants de ce jeu " +
+            "portent le même identifiant. Le jeu doit être corrigé.",
+        );
       }
     } else if (data.event === "session_players_changed") {
       // un joueur est entré ou sorti : on redemande la liste pour rafraîchir
@@ -497,7 +494,6 @@ function hideError(id: string): void {
 // -------------------------------------------------
 
 function renderAll(): void {
-  if (!config) return;
   tabsContainer.innerHTML = "";
   tablesContainer.innerHTML = "";
 
@@ -690,23 +686,9 @@ function bindEventHandlers(): void {
   });
 }
 
-async function main(): Promise<void> {
+function main(): void {
   bindEventHandlers();
-
-  try {
-    const response = await fetch("conf.json");
-    config = (await response.json()) as AppConfig;
-  } catch (err) {
-    pushStatus("Erreur chargement conf.json: " + err);
-    return;
-  }
-
-  if (!config?.game_name_list?.length) {
-    pushStatus("Aucun jeu configuré dans conf.json.");
-    return;
-  }
-
   connectSharedSocket();
 }
 
-void main();
+main();
