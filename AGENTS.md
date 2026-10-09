@@ -48,6 +48,7 @@ prétendre avoir couvert une régression. La seule vérification possible est
 | `lobby.ts`         | Page de lobby : onglets de jeux, tables, modales créer/rejoindre (~700 lignes) |
 | `types.ts`         | Contrat de protocole — lire en premier |
 | `engine/board.ts` `button.ts` `counter.ts` `counter_box.ts` `dice.ts` | Modèle et dessin des composants |
+| `engine/hex_grid.ts` | Grille hexagonale d'un plateau (`grid` du `game_json`) : même calcul que `Tourtoirac/Components/hex_grid.py` |
 | `ws/wsClient.ts` `wsWorker.ts` | WebSocket, exécuté dans un **SharedWorker** |
 | `navigation.ts`    | URL `index.html` ↔ `game.html`, avec `?game=<nom>` pour garder l'onglet |
 | `session.ts`       | `sessionStorage` : session courante (`obg_session`) et identité (`obg_player_identity`) |
@@ -66,6 +67,7 @@ Les noms ne correspondent pas : c'est le piège principal.
 | `kind` du `game_json` | Tourtoirac | Raffaillac | Type dans `types.ts` |
 | --------------------- | ---------- | ---------- | -------------------- |
 | `board`   | `Board`   | `Board` (interface, `engine/board.ts`) | `BoardItem` |
+| `board_group` | `BoardGroup` | `BoardGroup` (interface, `engine/board.ts`) | `BoardGroupItem` |
 | `token`   | `Token`   | **`Counter`** (classe, `engine/counter.ts`) | `TokenItem` |
 | `counter` | `Counter` | **`CounterBox`** (interface, `engine/counter_box.ts`) | `CounterItem` |
 | `dice`    | `Dice`    | `Dice` (classe, `engine/dice.ts`) | `DiceItem` |
@@ -112,11 +114,12 @@ titre :
 
 | Section | Contenu |
 | ------- | ------- |
-| *Situation initiale* | `loadComponents` : `fixed` → `boards` + `counterBoxes`, `movable` → `counters` (pions), `dice` → `dices` |
-| *Retournement local d'un plateau* | Retournement à 180° **local au joueur** (jamais envoyé au serveur) |
+| *Situation initiale* | `loadComponents` : `fixed` → `boards` (les plateaux d'un `board_group` y sont mis à plat, le groupe va dans `boardGroups`) + `counterBoxes`, `movable` → `counters` (pions), `dice` → `dices` |
+| *Retournement local d'un plateau* | Retournement à 180° **local au joueur** (jamais envoyé au serveur). Seul un `board_group` `flippable` se retourne (`BoardGroup.flipped`), jamais un plateau seul. Un bouton par groupe ; le demi-tour se fait autour du centre de `flipArea(group)` (rectangle englobant), et tout ce qui est posé dans ce rectangle suit (`flippedGroupAt`, `displayTopLeft`) |
 | *Caméra*, *Défilement au bord* | `cameraX/Y`, `zoom`, `screenToWorld` / `worldToScreen`, défilement au bord de l'écran |
 | *Main* | `hand` (pions tenus), `pending` (requête `acquire`/`release` en vol, délai `RESPONSE_TIMEOUT`), `flushMoves` |
-| *Souris* | `onMouseDown` / `Move` / `Up` : clic sur une zone de rotation, de compteur, de dé ou d'un pion → `request*` |
+| *Souris* | `onMouseDown` / `Move` / `Up` : **bouton gauche** = clic sur une zone de rotation, de compteur, de dé ou d'un pion → `request*` ; **bouton droit enfoncé** = déplacement de la caméra (seul moyen, menu contextuel désactivé sur le canvas) ; bouton central ignoré |
+| *Hex grid* | Aperçu de l'hexagone visé par un pion tenu (`predictedHex`, miroir de `Session.snap_to_grid`), grille de calibrage affichée par la touche **G** avec la position du pointeur relative au plateau |
 | *Dessin* | `draw()` : plateaux, compteurs, dés, pions, boutons, infobulles |
 | *Messages du serveur Tourtoirac* | `handleServerMessage` : une branche `if/else` par `event` → fonctions `apply*` |
 | *Mise en place du jeu* | `allComponentsLoaded`, `maybeRequestSetup`, `applySetup`, `handleSessionEvent` |
@@ -126,7 +129,7 @@ titre :
 Convention : `requestX()` envoie l'action, `applyX(event)` applique la
 réponse diffusée. Le client n'applique **rien** de manière optimiste, sauf le
 déplacement d'un pion tenu (envoyé à chaque frame par `flushMoves`) et le
-retournement local d'un plateau.
+retournement local d'un `board_group`.
 
 ### Ajouter un type de composant
 

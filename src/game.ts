@@ -1,7 +1,8 @@
 import { Button } from "./engine/button";
-import { allBoardsLoaded, boardDims, createBoard } from "./engine/board";
-import type { Board } from "./engine/board";
+import { allBoardsLoaded, boardDims, createBoard, createBoardGroup, flipArea, flippedGroup } from "./engine/board";
+import type { Board, BoardGroup } from "./engine/board";
 import { Counter } from "./engine/counter";
+import { snapToHex, traceHex, traceHexesIn } from "./engine/hex_grid";
 import type { RotationDirection } from "./engine/counter";
 import {
   counterActionZoneAt,
@@ -17,6 +18,7 @@ import { lobbyReturnUrl, originGameName } from "./navigation";
 import { clearSession, loadPlayerIdentity, loadSession, storeSession } from "./session";
 import type {
   AcquireEvent,
+  BoardGroupItem,
   BoardItem,
   ComponentState,
   CounterItem,
@@ -52,9 +54,9 @@ const DEFAULT_FIX_BUTTON_X = 1350;
 const DEFAULT_FIX_BUTTON_Y = 10;
 const FIX_BUTTON_WIDTH = 220;
 const FIX_BUTTON_HEIGHT = 40;
-// bouton "flip" d'un plateau que le jeu marque flippable : le plateau se
-// retourne sur l'écran de ce joueur, sans rien changer pour les autres. Il est
-// ancré au plateau mais dimensionné en pixels d'écran, pour rester cliquable à
+// "flip" button of a board_group the game marks flippable: the group turns
+// over on this player's screen, without changing anything for the others. It
+// is anchored to the group but sized in screen pixels, pour rester cliquable à
 // tous les zooms : Vietnam a un plateau de 7600 px de large, où 80 px posés
 // dans le monde feraient 5 px à l'écran.
 const FLIP_BUTTON_WIDTH = 70;
@@ -194,6 +196,8 @@ updateSessionInfo();
 // -------------------------------------------------
 
 let boards: Board[] = [];
+// board_group components: their boards are also in "boards", in drawing order
+let boardGroups: BoardGroup[] = [];
 let counters: Counter[] = [];
 const countersById = new Map<string, Counter>();
 
@@ -227,9 +231,17 @@ let setupRequested = false;
 let setupRead = false;
 
 function loadComponents(components: SessionComponents | undefined): void {
-  boards = (components?.fixed ?? [])
-    .filter((item) => item.kind === "board")
-    .map((item) => createBoard(item as BoardItem));
+  // the boards of a group take its place in the drawing order
+  boardGroups = [];
+  boards = (components?.fixed ?? []).flatMap((item) => {
+    if (item.kind === "board") return [createBoard(item as BoardItem)];
+    if (item.kind === "board_group") {
+      const group = createBoardGroup(item as BoardGroupItem);
+      boardGroups.push(group);
+      return group.boards;
+    }
+    return [];
+  });
 
   counterBoxesById.clear();
   counterBoxes = (components?.fixed ?? [])
@@ -323,25 +335,26 @@ function loadComponents(components: SessionComponents | undefined): void {
 // Retournement local d'un plateau
 // -------------------------------------------------
 
-// Un bouton par plateau que le jeu autorise à retourner. Le retournement ne
-// change que la vue de ce joueur : il n'est ni envoyé au serveur ni partagé, un
-// autre écran garde le plateau dans le sens où son joueur le lit.
+// One button per board_group the game allows to turn over; a board alone never
+// turns. The flip only changes this player's view: it is neither sent to the
+// server nor shared, another screen keeps the group the way its player reads
+// it. The boards of the group and everything laid on them turn together.
 interface FlipPlate {
-  board: Board;
+  group: BoardGroup;
   button: Button;
 }
 
 let flipPlates: FlipPlate[] = [];
 
 function setupFlipButtons(): void {
-  flipPlates = boards
-    .filter((board) => board.flippable)
-    .map((board) => ({
-      board,
+  flipPlates = boardGroups
+    .filter((group) => group.flippable && group.boards.length > 0)
+    .map((group) => ({
+      group,
       button: new Button(0, 0, FLIP_BUTTON_WIDTH, FLIP_BUTTON_HEIGHT, "flip", () => {
-        board.flipped = !board.flipped;
-        // un pion en main suit le pointeur à l'écran : son emplacement logique
-        // bascule avec le plateau, sans quoi il saute à l'autre bout de la carte
+        group.flipped = !group.flipped;
+        // a held token follows the pointer on screen: its logical place turns
+        // with the group, otherwise it would jump to the other end of the map
         reanchorHand();
       }),
     }));
@@ -369,67 +382,74 @@ function reanchorHand(): void {
 // panoramique, et sa taille est en pixels d'écran alors que son ancre est dans
 // le monde.
 function placeFlipButton(plate: FlipPlate): Button {
-  const [x, y] = worldToScreen(plate.board.x, plate.board.y);
+  // top-left corner of the whole group
+  const area = flipArea(plate.group);
+  const [x, y] = worldToScreen(area.x, area.y);
   plate.button.x = x;
   plate.button.y = y;
   return plate.button;
 }
 
-function boardCenter(board: Board): [number, number] {
-  const { width, height } = boardDims(board);
-  return [board.x + width / 2, board.y + height / 2];
+// center of the half-turn of a group: its boards swap places as one map would
+function flipCenter(group: BoardGroup): [number, number] {
+  const area = flipArea(group);
+  return [area.x + area.width / 2, area.y + area.height / 2];
 }
 
-// le plateau retourné sous un point, ou null. Les plateaux ne se chevauchent
-// pas : un point appartient à au plus un d'entre eux.
-function flippedBoardAt(x: number, y: number): Board | null {
-  for (const board of boards) {
-    if (!board.flipped) continue;
-    const { width, height } = boardDims(board);
-    if (x >= board.x && x <= board.x + width && y >= board.y && y <= board.y + height) {
-      return board;
+// the flipped group under a point, or null. Groups do not overlap: a point
+// belongs to at most one of them. The whole bounding box of the group counts,
+// gaps between its boards included: that box is what the half-turn maps onto
+// itself.
+function flippedGroupAt(x: number, y: number): BoardGroup | null {
+  for (const group of boardGroups) {
+    if (!group.flipped) continue;
+    const area = flipArea(group);
+    if (x >= area.x && x <= area.x + area.width && y >= area.y && y <= area.y + area.height) {
+      return group;
     }
   }
   return null;
 }
 
-// Retourne un point de 180° autour du centre du plateau retourné qui le
-// contient. Un demi-tour est sa propre inverse : la même fonction convertit un
+// Turns a point by 180° around the center of the flipped group that contains
+// it. Un demi-tour est sa propre inverse : la même fonction convertit un
 // point de l'écran en point logique, et l'inverse.
 function flipPoint(x: number, y: number): [number, number] {
-  const board = flippedBoardAt(x, y);
-  if (board === null) return [x, y];
-  const [cx, cy] = boardCenter(board);
+  const group = flippedGroupAt(x, y);
+  if (group === null) return [x, y];
+  const [cx, cy] = flipCenter(group);
   return [2 * cx - x, 2 * cy - y];
 }
 
-// Coin haut-gauche à l'écran du rectangle d'un composant : si son centre tombe
-// sur un plateau retourné, on fait pivoter le rectangle de 180° autour de ce
-// centre. Le composant lui-même reste droit, seule sa place change.
+// Screen top-left corner of a component's rectangle: when its center falls in
+// a flipped group, the rectangle turns by 180° around the group's center.
+// The component itself stays upright, only its place changes.
 function displayTopLeft(x: number, y: number, width: number, height: number): [number, number] {
-  const board = flippedBoardAt(x + width / 2, y + height / 2);
-  if (board === null) return [x, y];
-  const [cx, cy] = boardCenter(board);
+  const group = flippedGroupAt(x + width / 2, y + height / 2);
+  if (group === null) return [x, y];
+  const [cx, cy] = flipCenter(group);
   return [2 * cx - (x + width), 2 * cy - (y + height)];
 }
 
-// Le plateau, tel qu'il se lit sur cet écran. Retourné, il pivote de 180° autour
-// de son centre : le rectangle qu'il occupe ne bouge pas, c'est son contenu qui
-// change de sens.
+// The board, as it reads on this screen. In a flipped group, it turns by 180°
+// around the center of the group: its picture is upside down, and it swaps
+// places with the boards opposite it.
 function drawBoard(board: Board, context: CanvasRenderingContext2D): void {
   if (!board.image.complete) return;
 
   const { width, height } = boardDims(board);
-  if (!board.flipped) {
+  const group = flippedGroup(board);
+  if (group === null) {
     context.drawImage(board.image, board.x, board.y, width, height);
     return;
   }
 
+  const [cx, cy] = flipCenter(group);
   context.save();
-  // le demi-tour se fait autour du coin bas-droit : le dessin repart de (0, 0)
-  context.translate(board.x + width, board.y + height);
-  context.rotate(Math.PI);
-  context.drawImage(board.image, 0, 0, width, height);
+  // half-turn around the flip center: (x, y) is drawn at (2cx - x, 2cy - y)
+  context.translate(2 * cx, 2 * cy);
+  context.scale(-1, -1);
+  context.drawImage(board.image, board.x, board.y, width, height);
   context.restore();
 }
 
@@ -462,6 +482,149 @@ function drawCounterAtDisplay(counter: Counter): void {
   drawAtDisplay(ctx, counter.x, counter.y, counter.width, counter.height, () => {
     counter.draw(ctx);
   });
+}
+
+// -------------------------------------------------
+// Hex grid
+// -------------------------------------------------
+
+// A board may declare a hex grid in its game_json: when its board_group has
+// "magnetism": true, Tourtoirac snaps the center of a released token onto the nearest hex center. The client never
+// moves the token itself: it outlines the hex the held token will land on, and
+// the "G" key draws the whole grid, to calibrate it against the map.
+
+// Tourtoirac's MOVE_THRESHOLD (Components/token.py): a token released this
+// close to its starting square goes back there, which wins over the grid
+const START_SQUARE_THRESHOLD = 30;
+
+let showGrid = false;
+
+// mirrors Token.near_initial_position on the server
+function nearStartingSquare(counter: Counter, x: number, y: number): boolean {
+  const dx = x - counter.initialX;
+  const dy = y - counter.initialY;
+  if (dx * dx + dy * dy <= START_SQUARE_THRESHOLD * START_SQUARE_THRESHOLD) return true;
+  if (!counter.showsOriginGhost || counter.originX === null || counter.originY === null) return false;
+  return Math.abs(x - counter.originX) < counter.width && Math.abs(y - counter.originY) < counter.height;
+}
+
+// the topmost board under a logical point, with the game_json size the server
+// tests against
+function topBoardAt(x: number, y: number): Board | null {
+  for (let i = boards.length - 1; i >= 0; i -= 1) {
+    const board = boards[i];
+    if (x >= board.x && x <= board.x + board.width && y >= board.y && y <= board.y + board.height) {
+      return board;
+    }
+  }
+  return null;
+}
+
+// the board and hex center a held counter would be snapped onto if released
+// now, mirroring Session.snap_to_grid on the server; null when it would not
+function predictedHex(counter: Counter): { board: Board; center: [number, number] } | null {
+  if (counter.moveBorder && nearStartingSquare(counter, counter.x, counter.y)) return null;
+  const centerX = counter.x + counter.width / 2;
+  const centerY = counter.y + counter.height / 2;
+  const board = topBoardAt(centerX, centerY);
+  if (board === null || board.grid === null || board.group?.magnetism !== true) return null;
+  const snapped = snapToHex(board.grid, centerX - board.x, centerY - board.y);
+  if (snapped === null) return null;
+  return { board, center: [board.x + snapped[0], board.y + snapped[1]] };
+}
+
+// draws in the logical space of a board: in a flipped group, a half-turn
+// around the group's center, like the tokens laid on it
+function drawInBoardView(board: Board, context: CanvasRenderingContext2D, draw: () => void): void {
+  const group = flippedGroup(board);
+  if (group === null) {
+    draw();
+    return;
+  }
+  const [cx, cy] = flipCenter(group);
+  context.save();
+  context.translate(2 * cx, 2 * cy);
+  context.scale(-1, -1);
+  draw();
+  context.restore();
+}
+
+// the whole grid of every board, limited to the visible part of the board
+function drawGridOverlay(context: CanvasRenderingContext2D): void {
+  const [viewLeft, viewTop] = screenToWorld(0, 0);
+  const [viewRight, viewBottom] = screenToWorld(canvas.width, canvas.height);
+  for (const board of boards) {
+    const grid = board.grid;
+    if (grid === null) continue;
+    const { width, height } = boardDims(board);
+    // a board of a flipped group shows its logical content turned around the
+    // group's center
+    let [left, top, right, bottom] = [viewLeft, viewTop, viewRight, viewBottom];
+    const group = flippedGroup(board);
+    if (group !== null) {
+      const [cx, cy] = flipCenter(group);
+      [left, top, right, bottom] = [2 * cx - viewRight, 2 * cy - viewBottom, 2 * cx - viewLeft, 2 * cy - viewTop];
+    }
+    left = Math.max(left, board.x) - board.x;
+    top = Math.max(top, board.y) - board.y;
+    right = Math.min(right, board.x + width) - board.x;
+    bottom = Math.min(bottom, board.y + height) - board.y;
+    if (left >= right || top >= bottom) continue;
+
+    drawInBoardView(board, context, () => {
+      context.save();
+      context.translate(board.x, board.y);
+      context.beginPath();
+      traceHexesIn(context, grid, left, top, right, bottom);
+      context.strokeStyle = "rgba(255, 0, 255, 0.8)";
+      context.lineWidth = 1.5 / zoom;
+      context.stroke();
+      // the origin hex, from which the grid is measured
+      context.beginPath();
+      traceHex(context, grid, grid.originX, grid.originY);
+      context.fillStyle = "rgba(255, 0, 255, 0.3)";
+      context.fill();
+      context.restore();
+    });
+  }
+}
+
+// outlines the hex each held counter would land on
+function drawTargetHexes(context: CanvasRenderingContext2D): void {
+  for (const counter of hand) {
+    const target = predictedHex(counter);
+    if (target === null) continue;
+    const grid = target.board.grid;
+    if (grid === null) continue;
+    drawInBoardView(target.board, context, () => {
+      context.beginPath();
+      traceHex(context, grid, target.center[0], target.center[1]);
+      context.fillStyle = "rgba(255, 255, 0, 0.25)";
+      context.fill();
+      context.strokeStyle = "rgba(255, 220, 0, 0.9)";
+      context.lineWidth = 3 / zoom;
+      context.stroke();
+    });
+  }
+}
+
+// with the grid shown, the pointer position relative to the board under it:
+// what the game_json grid needs to be set from
+function gridCalibrationText(): string {
+  const [wx, wy] = screenToWorld(pointerScreenX, pointerScreenY);
+  const [lx, ly] = flipPoint(wx, wy);
+  const board = topBoardAt(lx, ly);
+  if (board === null) return "Grid (G to hide)";
+  return `Grid (G to hide)  ${board.name}  x=${Math.round(lx - board.x)}  y=${Math.round(ly - board.y)}`;
+}
+
+function onKeyDown(event: KeyboardEvent): void {
+  if (event.ctrlKey || event.metaKey || event.altKey) return;
+  const target = event.target as HTMLElement | null;
+  if (target?.closest("input, textarea, select, [contenteditable]")) return;
+  if (event.key === "g" || event.key === "G") {
+    showGrid = !showGrid;
+  }
 }
 
 // le dé sous le pointeur, ou null : contrairement aux pions, un dé se lance
@@ -765,8 +928,14 @@ function applyHandEvent(answer: HandEvent, isOwnRequest: boolean): void {
 // Souris
 // -------------------------------------------------
 
+// MouseEvent.button values, and the MouseEvent.buttons bit of the right button
+const MOUSE_LEFT = 0;
+const MOUSE_RIGHT = 2;
+const MOUSE_RIGHT_MASK = 2;
+
 let lastMouseX = 0;
 let lastMouseY = 0;
+// the camera follows the pointer while the right button is held down
 let panning = false;
 let counterInfoText = "";
 
@@ -917,6 +1086,21 @@ function requestRelease(counter: Counter): void {
 function onMouseDown(event: MouseEvent): void {
   const sx = event.offsetX;
   const sy = event.offsetY;
+
+  // the right button only moves the camera, whatever lies under the pointer,
+  // and even with counters in hand: they follow the pointer again afterwards
+  if (event.button === MOUSE_RIGHT) {
+    panning = true;
+    lastMouseX = sx;
+    lastMouseY = sy;
+    return;
+  }
+  // the left button acts on the game; the others do nothing, and the middle
+  // one must not start the browser's autoscroll either
+  if (event.button !== MOUSE_LEFT) {
+    event.preventDefault();
+    return;
+  }
   const [wx, wy] = screenToWorld(sx, sy);
 
   // le bouton "fixe la position" est posé dans le monde, comme les composants
@@ -1006,14 +1190,7 @@ function onMouseDown(event: MouseEvent): void {
       requestAcquire(hit);
       return;
     }
-
-    // la main occupe déjà le pion : pas de déplacement de la caméra
-    if (hand.length > 0) return;
   }
-
-  panning = true;
-  lastMouseX = sx;
-  lastMouseY = sy;
 }
 
 function onMouseMove(event: MouseEvent): void {
@@ -1043,6 +1220,11 @@ function onMouseMove(event: MouseEvent): void {
   hoveredCounter = canHover ? hitCounter(lx, ly) : null;
   hoveredCounterBox = canHover ? hitCounterBox(counterBoxes, lx, ly) : null;
 
+  // the right button was released where no mouseup reached the page
+  if (panning && (event.buttons & MOUSE_RIGHT_MASK) === 0) {
+    panning = false;
+  }
+
   if (panning) {
     cameraX -= (sx - lastMouseX) / zoom;
     cameraY -= (sy - lastMouseY) / zoom;
@@ -1068,8 +1250,9 @@ function onMouseMove(event: MouseEvent): void {
   lastMouseY = sy;
 }
 
-function onMouseUp(): void {
-  panning = false;
+function onMouseUp(event: MouseEvent): void {
+  // only releasing the right button ends the camera move
+  if (event.button === MOUSE_RIGHT) panning = false;
 }
 
 // -------------------------------------------------
@@ -1183,7 +1366,7 @@ function drawStackPreview(): void {
 function onMouseLeave(): void {
   edgeInside = false;
   pointerOnCanvas = false;
-  onMouseUp();
+  panning = false;
 }
 
 // ---------------------------------------------
@@ -1288,6 +1471,10 @@ function draw(): void {
     drawBoard(board, ctx);
   }
 
+  if (showGrid) drawGridOverlay(ctx);
+  // under the tokens, so the held one stays visible over its target hex
+  drawTargetHexes(ctx);
+
   // les compteurs par-dessus le plateau : un cadre et un nombre, que les deux
   // zones + et - viennent recouvrir
   for (const box of counterBoxes) {
@@ -1368,8 +1555,8 @@ function draw(): void {
   // les boutons "flip" par-dessus le jeu, pour rester cliquables même quand un
   // pion passe sous eux, mais sous le bandeau d'info, comme le bouton "fixe la
   // position" : le nom du pion sélectionné doit rester lisible d'un bout à
-  // l'autre. Un plateau retourné occupe le même rectangle, son bouton reste
-  // donc au même endroit à l'écran.
+  // l'autre. A flipped group occupies the same bounding box, so its button
+  // stays at the same place on screen.
   for (const plate of flipPlates) {
     placeFlipButton(plate).draw(ctx);
   }
@@ -1384,6 +1571,15 @@ function draw(): void {
     ctx.fillStyle = "white";
     ctx.font = "bold 16px monospace";
     ctx.fillText(counterInfoText, 10, 20);
+  }
+
+  // grid calibration: pointer position relative to the board, bottom left
+  if (showGrid) {
+    ctx.fillStyle = "black";
+    ctx.fillRect(0, canvas.height - 28, canvas.width, 28);
+    ctx.fillStyle = "white";
+    ctx.font = "bold 16px monospace";
+    ctx.fillText(gridCalibrationText(), 10, canvas.height - 8);
   }
 }
 
@@ -1926,3 +2122,6 @@ canvas.addEventListener("wheel", onMouseWheel, { passive: false });
 
 // relâchement hors du canvas
 window.addEventListener("mouseup", onMouseUp);
+// the right button moves the camera: no context menu over the game
+canvas.addEventListener("contextmenu", (event) => event.preventDefault());
+window.addEventListener("keydown", onKeyDown);

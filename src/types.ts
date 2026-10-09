@@ -12,8 +12,46 @@ export interface BoardItem {
   y: number;
   width: number;
   height: number;
-  /** flippable : le jeu autorise-t-il le retournement local de ce plateau */
+  /**
+   * optional hex grid of the map: when the board_group holding the board has
+   * magnetism, Tourtoirac snaps a released token's center onto the nearest hex
+   * center. Null on a board saved without grid.
+   */
+  grid?: HexGridItem | null;
+}
+
+/**
+ * One to n boards making up a single map. A board is never turned over alone:
+ * with flippable, one button turns the whole group over, by a half-turn around
+ * its center, with everything laid on it. The flip stays local to this player.
+ * Each board keeps its own id (setup, grid).
+ */
+export interface BoardGroupItem {
+  kind: "board_group";
+  id: string;
   flippable?: boolean;
+  /**
+   * tokens snap to the grids of the boards only when true; otherwise the grids
+   * are only drawn. A board alone never snaps.
+   */
+  magnetism?: boolean;
+  boards: BoardItem[];
+}
+
+/** Hex grid of a board, in game_json units, relative to its top-left corner. */
+export interface HexGridItem {
+  type?: "hex";
+  /** "flat" (flat top, the default) or "pointy" (pointed top) */
+  orientation?: "flat" | "pointy";
+  /** center of one hex */
+  origin_x: number;
+  origin_y: number;
+  /** center-to-corner radius */
+  size: number;
+  /** vertical radius, for a slightly stretched scan; defaults to size */
+  size_y?: number;
+  /** no snap beyond this distance from the center; absent means no limit */
+  snap_radius?: number;
 }
 
 export interface TokenItem {
@@ -116,7 +154,7 @@ export interface DiceItem {
 
 export interface SessionComponents {
   // un plateau, un compteur : tout ce qui ne bouge pas avec les pions
-  fixed: (BoardItem | CounterItem)[];
+  fixed: (BoardItem | BoardGroupItem | CounterItem)[];
   movable: TokenItem[];
   // absent d'un Tourtoirac plus ancien : le dé est donc facultatif
   dice?: DiceItem[];
