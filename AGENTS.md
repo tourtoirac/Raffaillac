@@ -97,6 +97,10 @@ serveur.
    est affiché par jeu présent dans `sessions_info`. À la réponse, il envoie
    `list_sessions` et rafraîchit sur chaque `session_players_changed`.
 2. Modale de création ou d'adhésion → `create_session` / `join_session`.
+   Si le jeu déclare des nationalités (`GameVariantInfo.nationalities` à la
+   création, `ActiveSession.nationalities` pour un nouveau joueur), un
+   `<select>` obligatoire s'affiche et `nationality` part dans le message. Un
+   joueur qui reprend son siège et un spectateur ne choisissent rien.
    L'identité est stockée avant même la réponse (`storePlayerIdentity`).
 3. **`session_joined`** → `storeSession()` puis redirection vers
    `game.html?game=<nom>`.
@@ -134,6 +138,19 @@ Convention : `requestX()` envoie l'action, `applyX(event)` applique la
 réponse diffusée. Le client n'applique **rien** de manière optimiste, sauf le
 déplacement d'un pion tenu (envoyé à chaque frame par `flushMoves`) et le
 retournement local d'un `board_group`.
+
+### Nationalités
+
+Facultatif. Seule règle : un pion qui porte une nationalité n'est pris que par
+un joueur de cette nationalité. Le serveur fait foi (erreur
+`wrong_nationality`) ; `canAcquire` dans `game.ts` évite seulement la requête,
+pour `requestAcquire` comme pour `requestPick`, et le dit dans le bandeau
+d'info. Le serveur annonce la
+nationalité du siège dans `session_joined` (`myNationality` dans `game.ts`,
+affichée dans le bandeau après le pseudo) ; le lobby l'affiche après chaque
+pseudo. `Counter.nationality` reprend celle du pion (`TokenItem.nationality`),
+`Session.player_nationalities` celle de chaque siège : c'est là que viendront
+se brancher les règles.
 
 ### Ajouter un type de composant
 

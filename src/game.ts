@@ -177,11 +177,16 @@ const sessionInfo = document.getElementById("session-info");
 // d'un coup d'œil où l'on est et sous quelle identité.
 const gameTitle = document.getElementById("game-title");
 
+// the nationality of this player's seat, as the server announces it; null for
+// a watcher or a game that declares none
+let myNationality: string | null = null;
+
 function updateGameTitle(): void {
   if (!gameTitle) return;
   const gameName = originGameName() ?? "Online Boardgames";
   const nickname = loadPlayerIdentity()?.name;
-  gameTitle.textContent = nickname ? `${gameName} — ${nickname}` : gameName;
+  const player = nickname && myNationality ? `${nickname} (${myNationality})` : nickname;
+  gameTitle.textContent = player ? `${gameName} — ${player}` : gameName;
 }
 
 updateGameTitle();
@@ -372,6 +377,7 @@ function createCounter(token: TokenItem): Counter {
   // le rectangle vert vient du serveur ; absent, un pion repositionnable
   // commence sur sa case de départ
   if (typeof token.in_place === "boolean") counter.inPlace = token.in_place;
+  counter.nationality = token.nationality ?? null;
   return counter;
 }
 
@@ -1070,6 +1076,11 @@ function putInBag(counter: Counter, bag: Bag | undefined): void {
 function requestPick(bag: Bag, x: number, y: number): void {
   // an empty bag has nothing to give: the server would refuse anyway
   if (bag.content.length === 0) return;
+  // the server only draws among the tokens this player may take
+  if (!bag.content.some(canAcquire)) {
+    counterInfoText = `${bag.name}  aucun pion de votre nationalité`;
+    return;
+  }
   if (!isStarted) {
     warnGameNotStarted();
     return;
@@ -1260,7 +1271,19 @@ function applyFlip(message: FlipEvent): void {
   counter.setSide(message.side);
 }
 
+// A token that belongs to a nationality is only taken by a player of that
+// nationality. The server enforces it: the page only spares a doomed request.
+function canAcquire(counter: Counter): boolean {
+  return counter.nationality === null || counter.nationality === myNationality;
+}
+
 function requestAcquire(counter: Counter): void {
+  if (!canAcquire(counter)) {
+    // said in the info bar rather than in a window: a click on a token of
+    // another side is common on a crowded map
+    counterInfoText = `${counter.name}  réservé à ${counter.nationality}`;
+    return;
+  }
   if (!isStarted) {
     warnGameNotStarted();
     return;
@@ -1920,9 +1943,10 @@ let leavingDeadSession = false;
 // requête en vol n'aura pas de réponse, la main doit se libérer tout de suite.
 const ACQUIRE_ERRORS = ["session_not_started", "players_missing"];
 
-// refusal of a pick or of an acquire aimed at a bag: nothing to tell the
-// player, but the pending request will get no other answer
-const BAG_ERRORS = ["bag_empty", "component_not_a_bag", "component_in_bag"];
+// refusal of a pick, of an acquire aimed at a bag or at a token of another
+// nationality: nothing to tell the player, but the pending request will get
+// no other answer
+const BAG_ERRORS = ["bag_empty", "component_not_a_bag", "component_in_bag", "wrong_nationality"];
 
 // refus du démarrage : le bouton redevient cliquable
 const START_ERRORS = [
@@ -2125,6 +2149,10 @@ function handleSessionEvent(data: GameServerMessage): void {
   const event = data as unknown as SessionCreatedEvent;
   if (event.role) isWatcher = event.role === "watcher";
   if (typeof event.owner === "boolean") isOwner = event.owner;
+  if (event.nationality !== undefined) {
+    myNationality = event.nationality;
+    updateGameTitle();
+  }
   if (typeof session.started === "boolean") isStarted = session.started;
   if (Array.isArray(session.missing_players)) missingPlayers = session.missing_players;
   updateLeaveLinks();

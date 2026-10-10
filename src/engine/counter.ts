@@ -64,6 +64,8 @@ export class Counter {
   orientation: number;
   /** face affichée : le serveur en est seul juge */
   side: CounterSide;
+  /** the side the token belongs to, among the nationalities of the game */
+  nationality: string | null = null;
 
   constructor(
     name: string,

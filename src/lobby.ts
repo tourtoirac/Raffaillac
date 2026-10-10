@@ -116,6 +116,7 @@ const REFUSAL_CODES = new Set([
   "watchers_not_allowed",
   "watchers_full",
   "nickname_connected",
+  "invalid_nationality",
 ]);
 
 // un message peut être volumineux (session_created transporte tous les
@@ -176,7 +177,12 @@ function handleServerMessage(data: ServerMessage): void {
     } else if (data.event === "error") {
       const code = (data as unknown as ServerErrorEvent).error?.code;
       // le serveur a refuse l'adhesion : on rend la modale pour corriger
-      if (code && REFUSAL_CODES.has(code)) {
+      if (code === "invalid_nationality" && lastJoinAttempt === null) {
+        // refused creation: the modal normally prevents it, the game may have
+        // changed since the lobby read its description
+        openingGameName = null;
+        window.alert("Ce jeu demande de choisir une nationalité parmi celles qu'il propose.");
+      } else if (code && REFUSAL_CODES.has(code)) {
         reopenJoinModalAfterRefusal(code);
         lastJoinAttempt = null;
       } else if (code === "duplicate_component_ids") {
@@ -227,6 +233,8 @@ function handleSessionCreated(data: SessionCreatedEvent): void {
 let pendingGameName: string | null = null;
 let pendingVariantName = "default";
 let pendingPlayerLimits: { min: number; max: number } | null = null;
+// the nationalities the creation modal offers; empty when the game has none
+let pendingNationalities: string[] = [];
 
 // bornes de joueurs annoncées par la description de la variante
 function gamePlayerLimits(gameName: string, variantName: string): { min: number; max: number } | null {
@@ -241,6 +249,31 @@ function gamePlayerLimits(gameName: string, variantName: string): { min: number;
   return { min, max };
 }
 
+// the sides a game of that variant asks its players to choose from
+function variantNationalities(gameName: string, variantName: string): string[] {
+  const variants = gameInfo[gameName]?.variant ?? {};
+  return variants[variantName]?.nationalities ?? [];
+}
+
+// Fills a nationality select and shows its field only when the game declares
+// nationalities. Nothing is preselected: the choice is the player's.
+function fillNationalities(fieldId: string, selectId: string, nationalities: string[]): void {
+  const select = document.getElementById(selectId) as HTMLSelectElement;
+  select.innerHTML = "";
+  const placeholder = document.createElement("option");
+  placeholder.value = "";
+  placeholder.textContent = "— Choisir —";
+  select.appendChild(placeholder);
+  for (const nationality of nationalities) {
+    const option = document.createElement("option");
+    option.value = nationality;
+    option.textContent = nationality;
+    select.appendChild(option);
+  }
+  (document.getElementById(fieldId) as HTMLDivElement).style.display =
+    nationalities.length > 0 ? "block" : "none";
+}
+
 function openCreateModal(gameName: string, variantName?: string): void {
   pendingGameName = gameName;
   pendingVariantName = variantName || "default";
@@ -249,6 +282,9 @@ function openCreateModal(gameName: string, variantName?: string): void {
   (document.getElementById("input-access-key") as HTMLInputElement).value = "";
   (document.getElementById("input-allow-watchers") as HTMLInputElement).checked = true;
   hideError("nickname-error");
+  hideError("nationality-error");
+  pendingNationalities = variantNationalities(gameName, pendingVariantName);
+  fillNationalities("create-nationality-field", "input-nationality", pendingNationalities);
 
   const limits = gamePlayerLimits(gameName, pendingVariantName);
   pendingPlayerLimits = limits;
@@ -292,6 +328,14 @@ function confirmCreateSession(): void {
   }
   hideError("nickname-error");
 
+  // a game with nationalities seats nobody without one: the server refuses
+  const nationality = (document.getElementById("input-nationality") as HTMLSelectElement).value;
+  if (pendingNationalities.length > 0 && !nationality) {
+    showError("nationality-error");
+    return;
+  }
+  hideError("nationality-error");
+
   const playersVisible =
     (document.getElementById("players-fields") as HTMLDivElement).classList.contains("show");
   openingGameName = gameName;
@@ -304,6 +348,7 @@ function confirmCreateSession(): void {
     allows_watchers: allowsWatchers,
     access_key: accessKey,
   };
+  if (pendingNationalities.length > 0) message.nationality = nationality;
 
   // sans description exploitable, on laisse Chabanas appliquer ses valeurs
   if (pendingPlayerLimits) {
@@ -329,6 +374,8 @@ let pendingJoin: {
   nickname: string;
   gameName: string;
   role: "player" | "watcher";
+  // the nationalities a new player must choose from; empty when none is asked
+  nationalities: string[];
 } | null = null;
 
 function isSessionFull(session: ActiveSession): boolean {
@@ -344,9 +391,14 @@ function openJoinModal(
   nickname: string,
   gameName: string,
   role: "player" | "watcher" = "player",
+  // only for a new player: a watcher has no nationality, and a player coming
+  // back to their seat keeps the one they chose
+  nationalities: string[] = [],
 ): void {
   const isWatcher = role === "watcher";
-  pendingJoin = { sessionCode, nickname, gameName, role };
+  pendingJoin = { sessionCode, nickname, gameName, role, nationalities };
+  fillNationalities("join-nationality-field", "join-nationality", nationalities);
+  hideError("join-nationality-error");
   const nicknameInput = document.getElementById("join-nickname") as HTMLInputElement;
   nicknameInput.value = nickname;
   // un pseudo fourni reste verrouillé, sinon l'utilisateur le saisit
@@ -391,17 +443,29 @@ let lastJoinAttempt: {
   nickname: string;
   key: string;
   accessKey: string;
+  nationality: string;
+  nationalities: string[];
 } | null = null;
 
 function reopenJoinModalAfterRefusal(code: string): void {
   if (!lastJoinAttempt) return;
   const attempt = lastJoinAttempt;
-  openJoinModal(attempt.sessionCode, attempt.nickname, attempt.gameName, attempt.role);
+  openJoinModal(
+    attempt.sessionCode,
+    attempt.nickname,
+    attempt.gameName,
+    attempt.role,
+    attempt.nationalities,
+  );
+  (document.getElementById("join-nationality") as HTMLSelectElement).value = attempt.nationality;
   (document.getElementById("join-key") as HTMLInputElement).value = attempt.key;
   (document.getElementById("join-access-key") as HTMLInputElement).value = attempt.accessKey;
   // le message va sous le champ fautif quand il y en a un : une clé d'accès
   // refusée est une erreur de saisie, une partie pleine ne l'est pas
   switch (code) {
+    case "invalid_nationality":
+      showError("join-nationality-error");
+      break;
     case "access_key_incorrect":
       showError("join-access-key-error");
       break;
@@ -448,6 +512,13 @@ function confirmJoinSession(): void {
   // nouveau siège pour ce pseudo. Elle ne sert qu'à retrouver sa place ensuite.
   hideError("join-key-error");
 
+  const nationality = (document.getElementById("join-nationality") as HTMLSelectElement).value;
+  if (pendingJoin.nationalities.length > 0 && !nationality) {
+    showError("join-nationality-error");
+    return;
+  }
+  hideError("join-nationality-error");
+
   // l'access_key n'est obligatoire que si le créateur en a défini une : elle est
   // transmise telle quelle, le serveur tranche
   const accessKey =
@@ -461,6 +532,8 @@ function confirmJoinSession(): void {
     nickname,
     key,
     accessKey,
+    nationality,
+    nationalities: pendingJoin.nationalities,
   };
   const joinMessage: Record<string, unknown> = {
     action: "join_session",
@@ -472,6 +545,7 @@ function confirmJoinSession(): void {
   // le champ n'est pas envoyé pour un spectateur : le serveur n'a pas à le
   // attendre, et une key vide pourrait être prise pour une key saisie
   if (!isWatcher) joinMessage.key = key;
+  if (pendingJoin.nationalities.length > 0) joinMessage.nationality = nationality;
   getSocket()?.send(joinMessage);
   storePlayerIdentity(nickname, pendingJoin.role);
   closeJoinModal();
@@ -553,7 +627,10 @@ function renderAll(): void {
             const connected = player.connected === true;
             const pBtn = document.createElement("button");
             pBtn.className = "player-btn" + (connected ? " connected" : "");
-            pBtn.textContent = player.nickname;
+            // the side the player took, when the game has nationalities
+            pBtn.textContent = player.nationality
+              ? `${player.nickname} (${player.nationality})`
+              : player.nickname;
             pBtn.disabled = connected;
             if (connected) {
               pBtn.title = "En jeu";
@@ -583,7 +660,8 @@ function renderAll(): void {
           joinBtn.className = "join-session-btn";
           joinBtn.textContent = "Join";
           // aucun pseudo prérempli : le joueur choisit son propre nom
-          joinBtn.onclick = () => openJoinModal(session.code ?? "", "", name);
+          joinBtn.onclick = () =>
+            openJoinModal(session.code ?? "", "", name, "player", session.nationalities ?? []);
           actionCell.appendChild(joinBtn);
         }
 

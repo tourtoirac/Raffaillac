@@ -62,6 +62,8 @@ export interface TokenItem {
   back_src?: string | null;
   /** face affichée, telle que le serveur l'a rendue */
   side?: "front" | "back";
+  /** the side the token belongs to, among the nationalities of the game */
+  nationality?: string | null;
   /** null as long as the token waits inside a bag */
   x: number | null;
   y: number | null;
@@ -202,6 +204,11 @@ export interface SessionOptions {
    * null : le jeu ne veut pas du bouton ; objet : le bouton va a cet endroit
    */
   fix_positions?: FixPositionButton | null;
+  /**
+   * the sides the game declares, as written in its game_json. The session
+   * repeats them, cleaned, in Session.nationalities: read that one.
+   */
+  nationalities?: string[];
 }
 
 export interface Session {
@@ -225,6 +232,10 @@ export interface Session {
   started?: boolean;
   /** joueurs qui ont un siège mais ne sont pas à la table */
   missing_players?: string[];
+  /** the sides the game declares; empty or absent when it has none */
+  nationalities?: string[];
+  /** the nationality of each seat, by nickname */
+  player_nationalities?: Record<string, string>;
 }
 
 /**
@@ -248,6 +259,8 @@ export interface SessionPlayer {
   owner?: boolean;
   /** ce joueur est-il actuellement connecté à la partie ? */
   connected?: boolean;
+  /** the side this player took; null when the game declares none */
+  nationality?: string | null;
 }
 
 export interface GameVariantInfo {
@@ -255,6 +268,8 @@ export interface GameVariantInfo {
   min_players?: number;
   max_players?: number;
   max_watchers?: number;
+  /** the sides a player chooses from when creating a game of this variant */
+  nationalities?: string[];
 }
 
 export interface GameInfo {
@@ -271,6 +286,8 @@ export interface ActiveSession {
   allows_watchers?: boolean;
   /** une partie commencée n'accepte plus de nouveau joueur */
   started?: boolean;
+  /** the sides a new player of this game chooses from */
+  nationalities?: string[];
 }
 
 export interface SessionsInfoEvent {
@@ -289,6 +306,8 @@ export interface SessionCreatedEvent {
   // ce client a-t-il créé la partie ? seul l'owner peut la clore. Le serveur
   // en est seul juge : le client ne fait que lire la réponse
   owner?: boolean;
+  /** the nationality of this client's seat; null for a watcher or a game without any */
+  nationality?: string | null;
 }
 
 // état de la partie, diffusé à chaque changement : démarrage, joueur qui part
