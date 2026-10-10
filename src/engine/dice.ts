@@ -7,6 +7,15 @@
  * serveur le confirme à chaque lancer. Le client s'en sert dès le premier clic
  * pour verrouiller le dé tout de suite, sans attendre la réponse.
  */
+// A throw is animated: the dice shows a few random faces in a row before it
+// settles on the face the server drew. The animation lasts a random time
+// between these two bounds, and shows a new face every ROLL_FACE_INTERVAL_MS:
+// 6 to 12 faces, quick enough to read as a tumbling dice, slow enough for
+// each face to be seen.
+const ROLL_ANIMATION_MIN_MS = 500;
+const ROLL_ANIMATION_MAX_MS = 1000;
+const ROLL_FACE_INTERVAL_MS = 80;
+
 export class Dice {
   readonly name: string;
   readonly width: number;
@@ -22,6 +31,10 @@ export class Dice {
   src: string;
   /** instant avant lequel un clic est ignoré, 0 si le dé est jouable */
   lockedUntil = 0;
+  /** faces shown one after the other while the throw is animated */
+  private rollFaces: string[] = [];
+  /** when the running animation started, in ms */
+  private rollStartedAt = 0;
 
   constructor(
     name: string,
@@ -51,14 +64,40 @@ export class Dice {
     this.src = this.faces.has(src) ? src : (srcList[0] ?? "");
   }
 
-  /** image de la face courante, ou null tant qu'elle n'est pas chargée */
+  /**
+   * image of the face to draw, or null as long as it is not loaded: a random
+   * face while a throw is animated, then the current face
+   */
   face(): HTMLImageElement | null {
-    return this.faces.get(this.src) ?? null;
+    const step = Math.floor((Date.now() - this.rollStartedAt) / ROLL_FACE_INTERVAL_MS);
+    const src = step >= 0 && step < this.rollFaces.length ? this.rollFaces[step] : this.src;
+    return this.faces.get(src) ?? null;
   }
 
-  /** change de face, sans effet si l'image n'a pas été annoncée */
-  setFace(src: string): void {
-    if (this.faces.has(src)) this.src = src;
+  /**
+   * Sets the face a throw drew, after an animation showing random faces. Only
+   * the final face comes from the server: the faces shown on the way and the
+   * length of the animation are picked here, and differ from screen to screen.
+   */
+  roll(src: string): void {
+    if (!this.faces.has(src)) return;
+    this.src = src;
+    const sides = [...this.faces.keys()];
+    this.rollFaces = [];
+    // a dice with a single face has nothing to tumble through
+    if (sides.length < 2) return;
+    const duration =
+      ROLL_ANIMATION_MIN_MS + Math.random() * (ROLL_ANIMATION_MAX_MS - ROLL_ANIMATION_MIN_MS);
+    const steps = Math.round(duration / ROLL_FACE_INTERVAL_MS);
+    // each face differs from the one that follows it, the final face included:
+    // built backwards from it, so that every step is seen to change
+    let next = src;
+    for (let i = 0; i < steps; i++) {
+      const others = sides.filter((side) => side !== next);
+      next = others[Math.floor(Math.random() * others.length)];
+      this.rollFaces.unshift(next);
+    }
+    this.rollStartedAt = Date.now();
   }
 
   /** rend le dé injouable pour la durée indiquée, en secondes */
@@ -78,4 +117,13 @@ export class Dice {
       y <= this.y + this.height
     );
   }
+}
+
+/**
+ * One to n dice thrown together by one button. The pool draws nothing of its
+ * own: its dice are ordinary dice, also listed with the others.
+ */
+export interface DicePool {
+  readonly name: string;
+  readonly dice: Dice[];
 }

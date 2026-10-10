@@ -62,8 +62,9 @@ export interface TokenItem {
   back_src?: string | null;
   /** face affichée, telle que le serveur l'a rendue */
   side?: "front" | "back";
-  x: number;
-  y: number;
+  /** null as long as the token waits inside a bag */
+  x: number | null;
+  y: number | null;
   width: number;
   height: number;
   /** le jeu autorise-t-il à repositionner ce pion pendant le tour */
@@ -92,8 +93,8 @@ export interface TokenItem {
    * origin_x/origin_y au lancement du jeu, puis le setup et "Fixe la position"
    * l'en écartent — le rectangle vert la suit, le fantôme non.
    */
-  initial_x?: number;
-  initial_y?: number;
+  initial_x?: number | null;
+  initial_y?: number | null;
   /**
    * où est posé le fantôme "transparent", figé à l'installation du jeu. Absent
    * ou null quand le jeu ne demande pas de fantôme.
@@ -152,9 +153,38 @@ export interface DiceItem {
   roll_delay?: number;
 }
 
+/**
+ * One to n dice thrown together. The pool has no picture and no place of its
+ * own: it is declared in "fixed" and only says which dice belong together. One
+ * "roll" button, drawn above its dice, throws them all at once. Each dice
+ * keeps its own id and is still rolled alone by a click.
+ */
+export interface DicePoolItem {
+  kind: "dice_pool";
+  id: string;
+  dice: DiceItem[];
+}
+
+/**
+ * A bag: a fixed component holding tokens out of sight. A token released over
+ * it joins its content, a click takes one out at random, into the hand of the
+ * player. The tokens it holds have no position: x and y are null until picked.
+ */
+export interface BagItem {
+  kind: "bag";
+  id: string;
+  x: number;
+  y: number;
+  width: number;
+  height: number;
+  /** picture of the bag; absent or null, the client draws a plain box */
+  src?: string | null;
+  components: TokenItem[];
+}
+
 export interface SessionComponents {
-  // un plateau, un compteur : tout ce qui ne bouge pas avec les pions
-  fixed: (BoardItem | BoardGroupItem | CounterItem)[];
+  // a board, a counter, a dice pool, a bag: whatever does not move with the tokens
+  fixed: (BoardItem | BoardGroupItem | CounterItem | DicePoolItem | BagItem)[];
   movable: TokenItem[];
   // absent d'un Tourtoirac plus ancien : le dé est donc facultatif
   dice?: DiceItem[];
@@ -296,6 +326,21 @@ export interface ReleaseEvent extends HandEventBase {
   event: "release";
   // position à jour du composant au moment du lâcher
   component_json?: ComponentState;
+  /** the bag the token fell into; null or absent when it stays on the table */
+  bag_id?: string | null;
+}
+
+// a player took a token out of a bag, sent to the whole session: the token is
+// back on the table, in the hand of that player
+export interface PickEvent {
+  event: "pick";
+  /** id of the bag */
+  component_id: string;
+  user: string;
+  /** the request_id of the pick action, so a client recognises its own */
+  request_id?: string | null;
+  /** the token picked, at the place the server put it */
+  component_json: TokenItem;
 }
 
 // sous-ensemble de return_json() renvoyé par Tourtoirac pour un composant
@@ -356,6 +401,15 @@ export interface RollEvent {
   src: string;
   /** délai avant le prochain lancer, en secondes */
   cooldown_seconds: number;
+}
+
+// a player threw a whole dice pool, sent to the whole session in one message
+export interface RollPoolEvent {
+  event: "roll_pool";
+  /** id of the dice_pool */
+  component_id: string;
+  /** one entry per dice of the pool: the face drawn and its own delay */
+  dice: { component_id: string; src: string; cooldown_seconds: number }[];
 }
 
 // un joueur a fait pivoter un pion, diffusé à toute la session

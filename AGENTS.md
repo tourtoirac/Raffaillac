@@ -47,7 +47,7 @@ prétendre avoir couvert une régression. La seule vérification possible est
 | `game.ts`          | Page de jeu : état, canvas, souris, messages serveur (~1 700 lignes) |
 | `lobby.ts`         | Page de lobby : onglets de jeux, tables, modales créer/rejoindre (~700 lignes) |
 | `types.ts`         | Contrat de protocole — lire en premier |
-| `engine/board.ts` `button.ts` `counter.ts` `counter_box.ts` `dice.ts` | Modèle et dessin des composants |
+| `engine/bag.ts` `board.ts` `button.ts` `counter.ts` `counter_box.ts` `dice.ts` | Modèle et dessin des composants |
 | `engine/hex_grid.ts` | Grille hexagonale d'un plateau (`grid` du `game_json`) : même calcul que `Tourtoirac/Components/hex_grid.py` |
 | `ws/wsClient.ts` `wsWorker.ts` | WebSocket, exécuté dans un **SharedWorker** |
 | `navigation.ts`    | URL `index.html` ↔ `game.html`, avec `?game=<nom>` pour garder l'onglet |
@@ -71,6 +71,8 @@ Les noms ne correspondent pas : c'est le piège principal.
 | `token`   | `Token`   | **`Counter`** (classe, `engine/counter.ts`) | `TokenItem` |
 | `counter` | `Counter` | **`CounterBox`** (interface, `engine/counter_box.ts`) | `CounterItem` |
 | `dice`    | `Dice`    | `Dice` (classe, `engine/dice.ts`) | `DiceItem` |
+| `dice_pool` | `DicePool` | `DicePool` (interface, `engine/dice.ts`) | `DicePoolItem` |
+| `bag`     | `Bag`     | `Bag` (interface, `engine/bag.ts`) | `BagItem` |
 
 Dans `game.ts`, `counters` / `countersById` / `hand` désignent donc des
 **pions**, et `counterBoxes` des compteurs numériques. Partout, l'identifiant
@@ -114,13 +116,15 @@ titre :
 
 | Section | Contenu |
 | ------- | ------- |
-| *Situation initiale* | `loadComponents` : `fixed` → `boards` (les plateaux d'un `board_group` y sont mis à plat, le groupe va dans `boardGroups`) + `counterBoxes`, `movable` → `counters` (pions), `dice` → `dices` |
+| *Situation initiale* | `loadComponents` : `fixed` → `boards` (les plateaux d'un `board_group` y sont mis à plat, le groupe va dans `boardGroups`) + `counterBoxes`, `movable` → `counters` (pions), `dice` → `dices` ; les dés d'un `dice_pool` de `fixed` vont aussi dans `dices`, le groupe dans `dicePools` ; un `bag` de `fixed` va dans `bags`, ses pions dans `bag.content` et dans `countersById` mais **pas** dans `counters` (ils ne sont pas sur la table) |
 | *Retournement local d'un plateau* | Retournement à 180° **local au joueur** (jamais envoyé au serveur). Seul un `board_group` `flippable` se retourne (`BoardGroup.flipped`), jamais un plateau seul. Un bouton par groupe ; le demi-tour se fait autour du centre de `flipArea(group)` (rectangle englobant), et tout ce qui est posé dans ce rectangle suit (`flippedGroupAt`, `displayTopLeft`) |
+| (après `applyRoll`) | Bouton « roll » d'un `dice_pool` (`rollPlates`, `placeRollButton`) : en pixels d'écran, posé juste au-dessus du rectangle englobant les dés, masqué pour un spectateur, assombri tant qu'un dé du groupe est dans son délai. `requestRollPool` envoie `roll_pool`, `applyRollPool` applique toutes les faces |
 | *Caméra*, *Défilement au bord* | `cameraX/Y`, `zoom`, `screenToWorld` / `worldToScreen`, défilement au bord de l'écran |
 | *Main* | `hand` (pions tenus), `pending` (requête `acquire`/`release` en vol, délai `RESPONSE_TIMEOUT`), `flushMoves` |
-| *Souris* | `onMouseDown` / `Move` / `Up` : **bouton gauche** = clic sur une zone de rotation, de compteur, de dé ou d'un pion → `request*` ; **bouton droit enfoncé** = déplacement de la caméra (seul moyen, menu contextuel désactivé sur le canvas) ; bouton central ignoré |
+| *Main* (fin) | Sac : `requestPick` envoie `pick` (avec un `request_id`), `applyPick` remet le pion tiré dans `counters` et, pour celui qui a cliqué, dans `hand`, sous le pointeur ; `putInBag` retire de la table un pion relâché sur un sac (`release` avec `bag_id`) |
+| *Souris* | `onMouseDown` / `Move` / `Up` : **bouton gauche** = clic sur une zone de rotation, de compteur, de dé, d'un pion ou d'un sac → `request*` ; **bouton droit enfoncé** = déplacement de la caméra (seul moyen, menu contextuel désactivé sur le canvas) ; bouton central ignoré |
 | *Hex grid* | Aperçu de l'hexagone visé par un pion tenu (`predictedHex`, miroir de `Session.snap_to_grid`), grille de calibrage affichée par la touche **G** avec la position du pointeur relative au plateau |
-| *Dessin* | `draw()` : plateaux, compteurs, dés, pions, boutons, infobulles |
+| *Dessin* | `draw()` : plateaux, compteurs, sacs (avec le nombre de pions restants), dés, pions, boutons, infobulles |
 | *Messages du serveur Tourtoirac* | `handleServerMessage` : une branche `if/else` par `event` → fonctions `apply*` |
 | *Mise en place du jeu* | `allComponentsLoaded`, `maybeRequestSetup`, `applySetup`, `handleSessionEvent` |
 | *Initialisation* | Liens retour au lobby et clôture (owner), `onCloseSession` |

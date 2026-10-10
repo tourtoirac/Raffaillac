@@ -40,9 +40,12 @@ export class Counter {
 
   x: number;
   y: number;
-  /** case de départ, où revient un pion déposé sur son fantôme */
-  initialX: number;
-  initialY: number;
+  /**
+   * case de départ, où revient un pion déposé sur son fantôme ; null for a
+   * token that came out of a bag and has no starting square yet
+   */
+  initialX: number | null;
+  initialY: number | null;
   /**
    * où est posé le fantôme, figé à l'installation du jeu. Le setup et "Fixe la
    * position" déplacent initialX, pas ceci : le fantôme est le repère que le
@@ -76,8 +79,8 @@ export class Counter {
     backImage: HTMLImageElement | null = null,
     side: CounterSide = "front",
     origin: string | null = null,
-    initialX = x,
-    initialY = y,
+    initialX: number | null = x,
+    initialY: number | null = y,
     originX: number | null = null,
     originY: number | null = null,
   ) {

@@ -1,3 +1,5 @@
+import { bagUnder, createBag, drawBag, hitBag } from "./engine/bag";
+import type { Bag } from "./engine/bag";
 import { Button } from "./engine/button";
 import { allBoardsLoaded, boardDims, createBoard, createBoardGroup, flipArea, flippedGroup } from "./engine/board";
 import type { Board, BoardGroup } from "./engine/board";
@@ -14,21 +16,26 @@ import {
 } from "./engine/counter_box";
 import type { CounterAction, CounterBox } from "./engine/counter_box";
 import { Dice } from "./engine/dice";
+import type { DicePool } from "./engine/dice";
 import { lobbyReturnUrl, originGameName } from "./navigation";
 import { clearSession, loadPlayerIdentity, loadSession, storeSession } from "./session";
 import type {
   AcquireEvent,
+  BagItem,
   BoardGroupItem,
   BoardItem,
   ComponentState,
   CounterItem,
   CounterValueEvent,
   DiceItem,
+  DicePoolItem,
   FixPositionsEvent,
   FlipEvent,
   MoveEvent,
+  PickEvent,
   ReleaseEvent,
   RollEvent,
+  RollPoolEvent,
   RotateEvent,
   ServerErrorEvent,
   Session,
@@ -61,6 +68,12 @@ const FIX_BUTTON_HEIGHT = 40;
 // dans le monde feraient 5 px à l'écran.
 const FLIP_BUTTON_WIDTH = 70;
 const FLIP_BUTTON_HEIGHT = 26;
+// "roll" button of a dice_pool: it throws every dice of the pool at once. Like
+// the "flip" button it is sized in screen pixels; it sits just above the dice,
+// so that it never hides one of them.
+const ROLL_BUTTON_WIDTH = 70;
+const ROLL_BUTTON_HEIGHT = 26;
+const ROLL_BUTTON_GAP = 4;
 // Stack preview: popup listing every counter under the pointer when there is
 // more than one. Distances are in screen pixels; counters inside it are drawn
 // at the main view's zoom.
@@ -209,6 +222,14 @@ const counterBoxesById = new Map<string, CounterBox>();
 // un dé se lance d'un clic : ni prenable ni déplaçable
 let dices: Dice[] = [];
 const dicesById = new Map<string, Dice>();
+// dice_pool components: their dice are also in "dices"
+let dicePools: DicePool[] = [];
+
+// bags are "fixed" components: a released token falls into them, a click takes
+// one out at random. The tokens they hold are in countersById but not in
+// "counters": they are not on the table.
+let bags: Bag[] = [];
+const bagsById = new Map<string, Bag>();
 
 // la situation a-t-elle déjà été lue depuis le serveur
 let componentsLoaded = false;
@@ -254,69 +275,45 @@ function loadComponents(components: SessionComponents | undefined): void {
   countersById.clear();
   counters = (components?.movable ?? [])
     .filter((item) => item.kind === "token")
-    .map((item) => {
-      const token = item as TokenItem;
-      const img = new Image();
-      img.src = token.front_src;
-      // la face de dos est chargée tout de suite quand le jeu en donne une :
-      // un pion sans back_src ne se retourne pas, et n'a rien à précharger
-      let backImg: HTMLImageElement | null = null;
-      if (token.back_src) {
-        backImg = new Image();
-        backImg.src = token.back_src;
-      }
-      const counter = new Counter(
-        token.id,
-        img,
-        token.x,
-        token.y,
-        token.width,
-        token.height,
-        token.move_border ?? true,
-        // border : le jeu demande-t-il une ombre sous ce pion ?
-        token.border ?? false,
-        // un pion non orientable n'affiche aucune zone de rotation
-        token.orientable ?? false,
-        // l'angle atteint avant une sauvegarde de session, s'il y en a une
-        token.orientation ?? 0,
-        backImg,
-        // la face affichée quand la partie a été sauvegardée en cours de jeu
-        token.side ?? "front",
-        // "transparent" demande d'afficher le pion fantôme sur sa case d'origine
-        token.origin ?? null,
-        // case de départ, celle où revient un pion déposé sur son fantôme
-        token.initial_x ?? token.x,
-        token.initial_y ?? token.y,
-        // où poser le fantôme. Il reprend le x/y d'origine du pion, pas celui de
-        // sa case de départ : le setup et "fixe la position" déplacent la
-        // deuxième, jamais le fantôme.
-        token.origin_x ?? null,
-        token.origin_y ?? null,
-      );
-      // le rectangle vert vient du serveur ; absent, un pion repositionnable
-      // commence sur sa case de départ
-      if (typeof token.in_place === "boolean") counter.inPlace = token.in_place;
-      return counter;
-    });
+    .map((item) => createCounter(item as TokenItem));
 
   for (const counter of counters) {
     countersById.set(counter.name, counter);
   }
 
+  // the tokens of a bag are built like the others, so their pictures are
+  // loaded before they come out, but they stay off the table
+  bagsById.clear();
+  bags = (components?.fixed ?? [])
+    .filter((item) => item.kind === "bag")
+    .map((item) => {
+      const bag = item as BagItem;
+      const content = (bag.components ?? [])
+        .filter((token) => token.kind === "token")
+        .map(createCounter);
+      return createBag(bag, content);
+    });
+  for (const bag of bags) {
+    bagsById.set(bag.name, bag);
+    for (const counter of bag.content) {
+      countersById.set(counter.name, counter);
+    }
+  }
+
   dicesById.clear();
-  dices = (components?.dice ?? []).map((item) => {
-    const diceItem = item as DiceItem;
-    return new Dice(
-      diceItem.id,
-      diceItem.x,
-      diceItem.y,
-      diceItem.width,
-      diceItem.height,
-      diceItem.src_list ?? [],
-      diceItem.src,
-      diceItem.roll_delay ?? ROLL_COOLDOWN_SECONDS,
-    );
-  });
+  // the dice of a pool are drawn and clicked like the others: they are listed
+  // first, the dice declared alone are drawn above them
+  dicePools = (components?.fixed ?? [])
+    .filter((item) => item.kind === "dice_pool")
+    .map((item) => {
+      const pool = item as DicePoolItem;
+      return { name: pool.id, dice: (pool.dice ?? []).map(createDice) };
+    })
+    .filter((pool) => pool.dice.length > 0);
+  dices = [
+    ...dicePools.flatMap((pool) => pool.dice),
+    ...(components?.dice ?? []).map((item) => createDice(item as DiceItem)),
+  ];
 
   for (const dice of dices) {
     dicesById.set(dice.name, dice);
@@ -329,6 +326,66 @@ function loadComponents(components: SessionComponents | undefined): void {
   clearPending();
   cameraInitialized = false;
   setupFlipButtons();
+  setupRollButtons();
+}
+
+function createCounter(token: TokenItem): Counter {
+  const img = new Image();
+  img.src = token.front_src;
+  // la face de dos est chargée tout de suite quand le jeu en donne une :
+  // un pion sans back_src ne se retourne pas, et n'a rien à précharger
+  let backImg: HTMLImageElement | null = null;
+  if (token.back_src) {
+    backImg = new Image();
+    backImg.src = token.back_src;
+  }
+  const counter = new Counter(
+    token.id,
+    img,
+    // a token waiting inside a bag has no position yet
+    token.x ?? 0,
+    token.y ?? 0,
+    token.width,
+    token.height,
+    token.move_border ?? true,
+    // border : le jeu demande-t-il une ombre sous ce pion ?
+    token.border ?? false,
+    // un pion non orientable n'affiche aucune zone de rotation
+    token.orientable ?? false,
+    // l'angle atteint avant une sauvegarde de session, s'il y en a une
+    token.orientation ?? 0,
+    backImg,
+    // la face affichée quand la partie a été sauvegardée en cours de jeu
+    token.side ?? "front",
+    // "transparent" demande d'afficher le pion fantôme sur sa case d'origine
+    token.origin ?? null,
+    // case de départ, celle où revient un pion déposé sur son fantôme
+    // null on a token that came out of a bag: it has no starting square
+    token.initial_x === undefined ? token.x : token.initial_x,
+    token.initial_y === undefined ? token.y : token.initial_y,
+    // où poser le fantôme. Il reprend le x/y d'origine du pion, pas celui de
+    // sa case de départ : le setup et "fixe la position" déplacent la
+    // deuxième, jamais le fantôme.
+    token.origin_x ?? null,
+    token.origin_y ?? null,
+  );
+  // le rectangle vert vient du serveur ; absent, un pion repositionnable
+  // commence sur sa case de départ
+  if (typeof token.in_place === "boolean") counter.inPlace = token.in_place;
+  return counter;
+}
+
+function createDice(item: DiceItem): Dice {
+  return new Dice(
+    item.id,
+    item.x,
+    item.y,
+    item.width,
+    item.height,
+    item.src_list ?? [],
+    item.src,
+    item.roll_delay ?? ROLL_COOLDOWN_SECONDS,
+  );
 }
 
 // -------------------------------------------------
@@ -501,6 +558,8 @@ let showGrid = false;
 
 // mirrors Token.near_initial_position on the server
 function nearStartingSquare(counter: Counter, x: number, y: number): boolean {
+  // a token that came out of a bag has no starting square
+  if (counter.initialX === null || counter.initialY === null) return false;
   const dx = x - counter.initialX;
   const dy = y - counter.initialY;
   if (dx * dx + dy * dy <= START_SQUARE_THRESHOLD * START_SQUARE_THRESHOLD) return true;
@@ -648,9 +707,71 @@ function requestRoll(dice: Dice): void {
 function applyRoll(message: RollEvent): void {
   const dice = dicesById.get(message.component_id);
   if (!dice) return;
-  dice.setFace(message.src);
+  dice.roll(message.src);
   // le serveur fait foi : sa durée remplace celle qu'on s'était appliquée
   dice.lockFor(message.cooldown_seconds ?? dice.rollDelay);
+}
+
+// One button per dice_pool: it throws every dice of the pool at once. Unlike
+// the flip, the throw is a move of the game: it goes through the server, which
+// draws the faces and sends them to every screen.
+interface RollPlate {
+  pool: DicePool;
+  button: Button;
+}
+
+let rollPlates: RollPlate[] = [];
+
+function setupRollButtons(): void {
+  rollPlates = dicePools.map((pool) => ({
+    pool,
+    button: new Button(0, 0, ROLL_BUTTON_WIDTH, ROLL_BUTTON_HEIGHT, "roll", () => {
+      requestRollPool(pool);
+    }),
+  }));
+}
+
+// The pool is thrown as a whole: one dice still in its delay holds it all, as
+// the server would refuse the throw.
+function isPoolLocked(pool: DicePool): boolean {
+  return pool.dice.some((dice) => dice.isLocked());
+}
+
+// The button, at its place on screen: just above the top-left corner of the
+// rectangle enclosing the dice of the pool, where they are drawn. It is placed
+// again at each use, as the dice move under it with the camera, the setup and
+// the flip of a board_group.
+function placeRollButton(plate: RollPlate): Button {
+  let left = Infinity;
+  let top = Infinity;
+  for (const dice of plate.pool.dice) {
+    const [dx, dy] = displayTopLeft(dice.x, dice.y, dice.width, dice.height);
+    left = Math.min(left, dx);
+    top = Math.min(top, dy);
+  }
+  const [x, y] = worldToScreen(left, top);
+  plate.button.x = x;
+  plate.button.y = y - ROLL_BUTTON_HEIGHT - ROLL_BUTTON_GAP;
+  return plate.button;
+}
+
+function requestRollPool(pool: DicePool): void {
+  if (isPoolLocked(pool)) return;
+  // immediate local lock, as for a single dice: two quick clicks must not
+  // both leave before the server answers
+  for (const dice of pool.dice) dice.lockFor(dice.rollDelay);
+  getSocket()?.send({ action: "roll_pool", component_id: pool.name });
+}
+
+// the faces drawn by a player for a whole pool, applied by every screen
+function applyRollPool(message: RollPoolEvent): void {
+  for (const entry of message.dice ?? []) {
+    const dice = dicesById.get(entry.component_id);
+    if (!dice) continue;
+    dice.roll(entry.src);
+    // the server is the reference: its delay replaces the local one
+    dice.lockFor(entry.cooldown_seconds ?? dice.rollDelay);
+  }
 }
 
 // le serveur fait autorité sur le rectangle vert
@@ -818,7 +939,9 @@ function stepEdgeScroll(dt: number): void {
 
 let hand: Counter[] = [];
 let handAnchor: Counter | null = null;
-let pending: { action: "acquire" | "release"; componentId: string } | null = null;
+type PendingAction = "acquire" | "release" | "pick";
+// requestId: only set for a pick, whose answer names the token, not the bag
+let pending: { action: PendingAction; componentId: string; requestId?: string } | null = null;
 let pendingTimer: ReturnType<typeof setTimeout> | null = null;
 
 let handWorldX = 0;
@@ -827,9 +950,9 @@ let lastMouseWorldX = 0;
 let lastMouseWorldY = 0;
 
 // la main reste verrouillée tant que le serveur n'a pas répondu
-function setPending(action: "acquire" | "release", componentId: string): void {
+function setPending(action: PendingAction, componentId: string, requestId?: string): void {
   clearPending();
-  pending = { action, componentId };
+  pending = { action, componentId, requestId };
   pendingTimer = setTimeout(() => {
     console.warn("[WS] Aucune réponse du serveur pour", action, componentId);
     clearPending();
@@ -891,8 +1014,14 @@ function applyHandEvent(answer: HandEvent, isOwnRequest: boolean): void {
   // réapparaître le pion chez les autres joueurs, à l'endroit réel.
   // Le rectangle vert voyage dans le même message.
   if (answer.event === "release") {
-    applyComponentState((answer as ReleaseEvent).component_json);
-    bringCounterToFront(counter);
+    const release = answer as ReleaseEvent;
+    if (release.bag_id) {
+      // the token fell into a bag: it leaves the table
+      putInBag(counter, bagsById.get(release.bag_id));
+    } else {
+      applyComponentState(release.component_json);
+      bringCounterToFront(counter);
+    }
   }
 
   // les messages des autres joueurs sont affichés plus tard
@@ -922,6 +1051,89 @@ function applyHandEvent(answer: HandEvent, isOwnRequest: boolean): void {
   } else {
     counterInfoText = counterPositionText(counter);
   }
+}
+
+// A token released over a bag joins its content: it is no longer drawn nor
+// clickable, until the server picks it again.
+function putInBag(counter: Counter, bag: Bag | undefined): void {
+  const index = counters.indexOf(counter);
+  if (index >= 0) counters.splice(index, 1);
+  if (hoveredCounter === counter) hoveredCounter = null;
+  counter.inPlace = false;
+  counter.initialX = null;
+  counter.initialY = null;
+  if (bag !== undefined && !bag.content.includes(counter)) bag.content.push(counter);
+}
+
+// The client only says which bag it clicked and where: the server chooses the
+// token at random and puts it in the hand of the player.
+function requestPick(bag: Bag, x: number, y: number): void {
+  // an empty bag has nothing to give: the server would refuse anyway
+  if (bag.content.length === 0) return;
+  if (!isStarted) {
+    warnGameNotStarted();
+    return;
+  }
+  if (missingPlayers.length > 0) {
+    warnPlayersMissing();
+    return;
+  }
+  const socket = getSocket();
+  if (!socket) return;
+
+  // two players may pick from the same bag at once: the id tells this
+  // request's answer from the other player's
+  const requestId = `${Date.now()}-${Math.random().toString(36).slice(2)}`;
+  const message = { action: "pick", component_id: bag.name, x, y, request_id: requestId };
+  setPending("pick", bag.name, requestId);
+  socket.send(message);
+  console.log("[WS] Envoyé :", JSON.stringify(message));
+}
+
+// A token came out of a bag, applied by every screen: it is back on the table,
+// above the others, in the hand of the player who picked it.
+function applyPick(message: PickEvent): void {
+  const isOwnRequest =
+    pending?.action === "pick" &&
+    pending.requestId !== undefined &&
+    pending.requestId === message.request_id;
+  if (isOwnRequest) clearPending();
+
+  const state = message.component_json;
+  if (!state) return;
+
+  let counter = countersById.get(state.id);
+  if (counter === undefined) {
+    // a token this screen never heard of: built from what the server sends
+    counter = createCounter(state);
+    countersById.set(counter.name, counter);
+  }
+  const picked = counter;
+  for (const bag of bags) {
+    bag.content = bag.content.filter((candidate) => candidate !== picked);
+  }
+
+  counter.x = state.x ?? 0;
+  counter.y = state.y ?? 0;
+  counter.inPlace = false;
+  counter.initialX = state.initial_x ?? null;
+  counter.initialY = state.initial_y ?? null;
+  if (state.side !== undefined) counter.setSide(state.side);
+  if (!counters.includes(counter)) counters.push(counter);
+
+  if (isOwnRequest) {
+    // the pointer may have moved since the click: the token comes out under
+    // it, so that a click on it releases it
+    counter.x = lastMouseWorldX - counter.width / 2;
+    counter.y = lastMouseWorldY - counter.height / 2;
+    movesDirty = true;
+  }
+
+  // from here on, the token is taken in hand like one acquired on the table
+  applyHandEvent(
+    { event: "acquire", component_id: counter.name, user: message.user, success: true },
+    isOwnRequest,
+  );
 }
 
 // -------------------------------------------------
@@ -1143,6 +1355,15 @@ function onMouseDown(event: MouseEvent): void {
   // l'acquire de son côté, on n'envoie donc même pas la demande. Il peut en
   // revanche déplacer la caméra comme un joueur, pour suivre la partie.
   if (!isWatcher) {
+    // click on the "roll" button of a dice pool: drawn on screen like the
+    // "flip" button, it is aimed in screen coordinates
+    for (const plate of rollPlates) {
+      if (placeRollButton(plate).contains(sx, sy)) {
+        plate.button.callback();
+        return;
+      }
+    }
+
     // clic sur un dé : il se lance sur place, sans le prendre en main
     const clickedDice = hitDiceAt(lx, ly);
     if (clickedDice !== null) {
@@ -1188,6 +1409,14 @@ function onMouseDown(event: MouseEvent): void {
         }
       }
       requestAcquire(hit);
+      return;
+    }
+
+    // click on a bag: one of its tokens comes out at random. A token lying
+    // on the bag is drawn above it and was taken first.
+    const clickedBag = hitBag(bags, lx, ly);
+    if (clickedBag !== null) {
+      requestPick(clickedBag, lx, ly);
       return;
     }
   }
@@ -1483,6 +1712,15 @@ function draw(): void {
     });
   }
 
+  // bags lie on the board, under the tokens. A bag a held token hovers over
+  // is outlined: releasing the token there drops it in.
+  for (const bag of bags) {
+    const targeted = hand.some((counter) => bagUnder(bags, counter) === bag);
+    drawAtDisplay(ctx, bag.x, bag.y, bag.width, bag.height, () => {
+      drawBag(ctx, bag, targeted);
+    });
+  }
+
   // le bouton de repositionnement est réservé aux joueurs
   if (!isWatcher && buttonFix) buttonFix.draw(ctx);
 
@@ -1561,6 +1799,19 @@ function draw(): void {
     placeFlipButton(plate).draw(ctx);
   }
 
+  // the "roll" buttons of the dice pools, for players only: a watcher does not
+  // throw. A button darkens with its dice while the pool waits for its delay.
+  if (!isWatcher) {
+    for (const plate of rollPlates) {
+      const button = placeRollButton(plate);
+      button.draw(ctx);
+      if (isPoolLocked(plate.pool)) {
+        ctx.fillStyle = "rgba(0, 0, 0, 0.45)";
+        ctx.fillRect(button.x, button.y, button.w, button.h);
+      }
+    }
+  }
+
   // above the game and the flip buttons, below the info bar
   drawStackPreview();
 
@@ -1609,10 +1860,14 @@ function handleServerMessage(raw: unknown): void {
       }
 
       applyHandEvent(answer, isOwnRequest);
+    } else if (data.event === "pick") {
+      applyPick(data as unknown as PickEvent);
     } else if (data.event === "move") {
       applyRemoteMove(data as unknown as MoveEvent);
     } else if (data.event === "roll") {
       applyRoll(data as unknown as RollEvent);
+    } else if (data.event === "roll_pool") {
+      applyRollPool(data as unknown as RollPoolEvent);
     } else if (data.event === "rotate") {
       applyRotate(data as unknown as RotateEvent);
     } else if (data.event === "flip") {
@@ -1665,6 +1920,10 @@ let leavingDeadSession = false;
 // requête en vol n'aura pas de réponse, la main doit se libérer tout de suite.
 const ACQUIRE_ERRORS = ["session_not_started", "players_missing"];
 
+// refusal of a pick or of an acquire aimed at a bag: nothing to tell the
+// player, but the pending request will get no other answer
+const BAG_ERRORS = ["bag_empty", "component_not_a_bag", "component_in_bag"];
+
 // refus du démarrage : le bouton redevient cliquable
 const START_ERRORS = [
   "not_session_owner",
@@ -1682,6 +1941,11 @@ function reportServerError(data: ServerErrorEvent): void {
     // the local state may lag behind the server: the refusal is shown anyway
     if (code === "session_not_started") warnGameNotStarted();
     if (code === "players_missing") warnPlayersMissing();
+    return;
+  }
+
+  if (code && BAG_ERRORS.includes(code)) {
+    clearPending();
     return;
   }
 
@@ -1770,6 +2034,12 @@ function allComponentsLoaded(): boolean {
       if (!face.complete) return false;
     }
   }
+  for (const bag of bags) {
+    if (bag.image !== null && !bag.image.complete) return false;
+    for (const counter of bag.content) {
+      if (!counter.image.complete) return false;
+    }
+  }
   return true;
 }
 
@@ -1829,6 +2099,13 @@ function applySetup(message: SetupEvent): void {
     if (dice !== undefined) {
       dice.x = state.x;
       dice.y = state.y;
+      continue;
+    }
+
+    const bag = bagsById.get(state.id);
+    if (bag !== undefined) {
+      bag.x = state.x;
+      bag.y = state.y;
     }
   }
 
