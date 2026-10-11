@@ -18,6 +18,7 @@ import type { CounterAction, CounterBox } from "./engine/counter_box";
 import { Dice } from "./engine/dice";
 import type { DicePool } from "./engine/dice";
 import { lobbyReturnUrl, originGameName } from "./navigation";
+import { acquireGameLock, GAME_OPEN_ELSEWHERE_MESSAGE } from "./gameLock";
 import { clearSession, loadPlayerIdentity, loadSession, storeSession } from "./session";
 import type {
   AcquireEvent,
@@ -2148,6 +2149,9 @@ const loadingWarning = document.getElementById("loading-warning");
 // has the server described the table since this page opened
 let sessionSynced = false;
 
+// another tab of this browser already plays: this page shows why and stops there
+let blockedByOtherTab = false;
+
 // the overlay is for the first load only: an image revealed later (flip, pick)
 // must not hide the table again
 let loadingDone = loadingOverlay === null;
@@ -2162,7 +2166,7 @@ const SETUP_WAIT_MS = 8000;
 // place in front of the player. A watcher does not wait for the setup, which
 // only a player can request.
 function updateLoadingOverlay(): void {
-  if (loadingDone || loadingOverlay === null) return;
+  if (loadingDone || blockedByOtherTab || loadingOverlay === null) return;
 
   if (!sessionSynced) {
     if (loadingText) loadingText.textContent = "Connexion à la partie…";
@@ -2507,8 +2511,11 @@ setupFixButton(currentSession);
 // nouveau chargement de la situation
 componentsLoaded = currentSession?.key !== undefined;
 
-const socket = getSocket();
-if (socket) {
+// The connection is only opened by the one game page of this browser: a
+// second one would speak for the first on the shared WebSocket (see gameLock.ts).
+function startConnection(): void {
+  const socket = getSocket();
+  if (!socket) return;
   socket.setMessageHandler(handleServerMessage);
   // une coupure annule la requête en attente : la main n'est plus verrouillée
   socket.setStateHandler((message) => {
@@ -2532,6 +2539,18 @@ if (socket) {
     }
   });
 }
+
+void acquireGameLock().then((acquired) => {
+  if (acquired) {
+    startConnection();
+    return;
+  }
+  // The overlay stays up with the reason: this page never talks to the server.
+  blockedByOtherTab = true;
+  if (loadingText) loadingText.textContent = GAME_OPEN_ELSEWHERE_MESSAGE;
+  if (loadingBar) loadingBar.hidden = true;
+  if (loadingOverlay === null) window.alert(GAME_OPEN_ELSEWHERE_MESSAGE);
+});
 
 // -------------------------------------------------
 // Boucle du jeu

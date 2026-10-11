@@ -1,3 +1,4 @@
+import { GAME_OPEN_ELSEWHERE_MESSAGE, isGameOpenElsewhere } from "./gameLock";
 import { gameEntryUrl } from "./navigation";
 import { storePlayerIdentity, storeSession } from "./session";
 import type {
@@ -218,6 +219,9 @@ function handleSessionsInfo(data: SessionsInfoEvent): void {
 }
 
 function handleSessionCreated(data: SessionCreatedEvent): void {
+  // The WebSocket is shared by every tab: a session event answers the request
+  // of whichever tab made it. A lobby that asked for nothing stays where it is.
+  if (openingGameName === null) return;
   const session = data.session;
   if (session?.key) {
     storeSession(session);
@@ -313,7 +317,11 @@ function closeCreateModal(): void {
   pendingPlayerLimits = null;
 }
 
-function confirmCreateSession(): void {
+async function confirmCreateSession(): Promise<void> {
+  if (await isGameOpenElsewhere()) {
+    window.alert(GAME_OPEN_ELSEWHERE_MESSAGE);
+    return;
+  }
   const nickname = (document.getElementById("input-nickname") as HTMLInputElement).value.trim();
   const key = (document.getElementById("input-key") as HTMLInputElement).value.trim() || "";
   const accessKey =
@@ -496,7 +504,11 @@ function reopenJoinModalAfterRefusal(code: string): void {
   }
 }
 
-function confirmJoinSession(): void {
+async function confirmJoinSession(): Promise<void> {
+  if (await isGameOpenElsewhere()) {
+    window.alert(GAME_OPEN_ELSEWHERE_MESSAGE);
+    return;
+  }
   if (!pendingJoin) return;
   const isWatcher = pendingJoin.role === "watcher";
   const nickname = (document.getElementById("join-nickname") as HTMLInputElement).value.trim();
@@ -747,20 +759,20 @@ function bindEventHandlers(): void {
   document.getElementById("create-modal-close")!.onclick = closeCreateModal;
   document.getElementById("modal-confirm")!.onclick = confirmCreateSession;
   document.getElementById("input-nickname")!.addEventListener("keydown", (e) => {
-    if (e.key === "Enter") confirmCreateSession();
+    if (e.key === "Enter") void confirmCreateSession();
   });
   document.getElementById("input-key")!.addEventListener("keydown", (e) => {
-    if (e.key === "Enter") confirmCreateSession();
+    if (e.key === "Enter") void confirmCreateSession();
   });
   document.getElementById("input-access-key")!.addEventListener("keydown", (e) => {
-    if (e.key === "Enter") confirmCreateSession();
+    if (e.key === "Enter") void confirmCreateSession();
   });
 
   document.getElementById("join-cancel")!.onclick = closeJoinModal;
   document.getElementById("join-modal-close")!.onclick = closeJoinModal;
   document.getElementById("join-confirm")!.onclick = confirmJoinSession;
   document.getElementById("join-key")!.addEventListener("keydown", (e) => {
-    if (e.key === "Enter") confirmJoinSession();
+    if (e.key === "Enter") void confirmJoinSession();
   });
 }
 

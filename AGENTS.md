@@ -50,6 +50,7 @@ prétendre avoir couvert une régression. La seule vérification possible est
 | `engine/bag.ts` `board.ts` `button.ts` `counter.ts` `counter_box.ts` `dice.ts` | Modèle et dessin des composants |
 | `engine/hex_grid.ts` | Grille hexagonale d'un plateau (`grid` du `game_json`) : même calcul que `Tourtoirac/Components/hex_grid.py` |
 | `ws/wsClient.ts` `wsWorker.ts` | WebSocket, exécuté dans un **SharedWorker** |
+| `gameLock.ts`      | Une seule page de jeu par navigateur (Web Lock `obg_game`) |
 | `navigation.ts`    | URL `index.html` ↔ `game.html`, avec `?game=<nom>` pour garder l'onglet |
 | `session.ts`       | `sessionStorage` : session courante (`obg_session`) et identité (`obg_player_identity`) |
 
@@ -93,6 +94,15 @@ serveur.
 - `ws/wsClient.ts` expose `getSocket()` → `{send, setMessageHandler,
   setStateHandler}`, en singleton sur `window.obgSocket`. Les messages reçus
   avant `setMessageHandler` sont mis en tampon.
+- **Une seule partie par navigateur** (`gameLock.ts`) : la WebSocket étant
+  partagée, deux onglets en jeu ne feraient qu'une connexion pour le serveur.
+  `game.ts` prend le verrou `obg_game` avant d'ouvrir sa connexion
+  (`startConnection`) ; sans lui, la page affiche le motif et n'envoie rien.
+  `lobby.ts` refuse `create_session` / `join_session` tant que le verrou est
+  tenu, et ignore un `session_joined` qu'il n'a pas demandé
+  (`openingGameName` à `null`) : il vient d'un autre onglet. Le verrou tombe
+  seul à la fermeture de l'onglet. Hors contexte sécurisé (ni https ni
+  localhost), l'API n'existe pas et le garde-fou est inactif.
 - Le navigateur **ne parle qu'à Tourtoirac**. Aucun appel HTTP vers Chabanas
   (le seul `fetch` est celui de `conf.json` par `wsWorker.ts`).
 
