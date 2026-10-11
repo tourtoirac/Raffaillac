@@ -974,6 +974,79 @@ let grabbedName: string | null = null;
 let grabWorldX = 0;
 let grabWorldY = 0;
 
+// Long press: the button stays down on a stack without moving, and every
+// token under the press point joins the hand. They then move and are put down
+// together.
+const LONG_PRESS_MS = 500;
+// the pointer may tremble this much, in screen pixels, and still be "not moving"
+const LONG_PRESS_SLACK = 6;
+let longPressTimer: ReturnType<typeof setTimeout> | null = null;
+let pressScreenX = 0;
+let pressScreenY = 0;
+
+// Tokens asked for by a long press, whose acquire is not answered yet. They
+// are several at once, so `pending`, which follows one request, cannot tell
+// their answers from another player's.
+const stackRequests = new Set<string>();
+let stackRequestsTimer: ReturnType<typeof setTimeout> | null = null;
+
+function cancelLongPress(): void {
+  if (longPressTimer !== null) {
+    clearTimeout(longPressTimer);
+    longPressTimer = null;
+  }
+}
+
+function armLongPress(sx: number, sy: number): void {
+  cancelLongPress();
+  pressScreenX = sx;
+  pressScreenY = sy;
+  longPressTimer = setTimeout(() => {
+    longPressTimer = null;
+    grabStack();
+  }, LONG_PRESS_MS);
+}
+
+// The long press is confirmed: asks for every other token lying under the
+// point where the button went down. The top one is already in hand, or on its
+// way: it was asked for when the button went down.
+function grabStack(): void {
+  if (!dragging || isWatcher) return;
+  // the token under the pointer was refused: nothing leaves without it
+  if (hand.length === 0 && pending?.action !== "acquire") return;
+  const socket = getSocket();
+  if (!socket) return;
+
+  const stack = countersAt(grabWorldX, grabWorldY).filter(
+    (counter) =>
+      !hand.includes(counter) &&
+      counter.name !== grabbedName &&
+      counter.heldBy === null &&
+      canAcquire(counter),
+  );
+  if (stack.length === 0) return;
+
+  for (const counter of stack) {
+    stackRequests.add(counter.name);
+    const message = { action: "acquire", component_id: counter.name };
+    socket.send(message);
+    console.log("[WS] Envoyé :", JSON.stringify(message));
+  }
+  // an acquire refused by an error event names no token: the requests left
+  // unanswered are forgotten, so that they never match a later acquire
+  if (stackRequestsTimer !== null) clearTimeout(stackRequestsTimer);
+  stackRequestsTimer = setTimeout(() => {
+    stackRequests.clear();
+    stackRequestsTimer = null;
+  }, RESPONSE_TIMEOUT);
+}
+
+// The hand is kept in drawing order, bottom first: a stack taken in hand is
+// drawn, and later put down, in the order it had on the table.
+function sortHand(): void {
+  hand.sort((a, b) => counters.indexOf(a) - counters.indexOf(b));
+}
+
 // la main reste verrouillée tant que le serveur n'a pas répondu
 function setPending(action: PendingAction, componentId: string, requestId?: string): void {
   clearPending();
@@ -1025,7 +1098,7 @@ function bringCounterToFront(counter: Counter): void {
 
 // Le serveur accuse réception de chaque acquisition / relâchement :
 // la main est reconstruite à partir de ces accusés, un composant à la fois.
-function applyHandEvent(answer: HandEvent, isOwnRequest: boolean): void {
+function applyHandEvent(answer: HandEvent, isOwnRequest: boolean, fromStack = false): void {
   const counter = countersById.get(answer.component_id);
   if (!counter) {
     console.warn("[hand] Composant inconnu :", answer.component_id);
@@ -1060,19 +1133,34 @@ function applyHandEvent(answer: HandEvent, isOwnRequest: boolean): void {
 
     counter.held = true;
     hand.push(counter);
-    handAnchor = counter;
+    sortHand();
 
-    if (releaseOnArrival) {
-      // the button is already up: the token goes straight back down
-      releaseOnArrival = false;
-      requestRelease(counter);
-    } else if (dragging && grabbedName === counter.name) {
-      // the pointer moved while the server was answering
-      counter.x += lastMouseWorldX - grabWorldX;
-      counter.y += lastMouseWorldY - grabWorldY;
-      movesDirty = true;
+    if (fromStack) {
+      // a token of a long press: the token the button went down on stays the
+      // anchor of the hand
+      if (!dragging) {
+        // the button is already up: the token goes straight back down
+        requestRelease(counter);
+      } else {
+        // the stack follows the token that left first
+        counter.x += lastMouseWorldX - grabWorldX;
+        counter.y += lastMouseWorldY - grabWorldY;
+        movesDirty = true;
+      }
+    } else {
+      handAnchor = counter;
+      if (releaseOnArrival) {
+        // the button is already up: the token goes straight back down
+        releaseOnArrival = false;
+        requestRelease(counter);
+      } else if (dragging && grabbedName === counter.name) {
+        // the pointer moved while the server was answering
+        counter.x += lastMouseWorldX - grabWorldX;
+        counter.y += lastMouseWorldY - grabWorldY;
+        movesDirty = true;
+      }
+      grabbedName = null;
     }
-    grabbedName = null;
   } else {
     const index = hand.indexOf(counter);
     if (index >= 0) hand.splice(index, 1);
@@ -1347,15 +1435,17 @@ function modificationRefused(counter: Counter): boolean {
   return false;
 }
 
-function requestAcquire(counter: Counter): void {
-  if (modificationRefused(counter)) return;
+// Returns true when the request was sent.
+function requestAcquire(counter: Counter): boolean {
+  if (modificationRefused(counter)) return false;
   const socket = getSocket();
-  if (!socket) return;
+  if (!socket) return false;
 
   const message = { action: "acquire", component_id: counter.name };
   setPending("acquire", counter.name);
   socket.send(message);
   console.log("[WS] Envoyé :", JSON.stringify(message));
+  return true;
 }
 
 function requestRelease(counter: Counter): void {
@@ -1377,10 +1467,17 @@ function requestRelease(counter: Counter): void {
 
 // The left button came up: whatever is in hand is put down where it is.
 function dropHand(): void {
+  cancelLongPress();
   if (!dragging) return;
   dragging = false;
 
   if (hand.length > 0) {
+    // The token the button went down on may still be on its way while others
+    // are already here. The releases below take over `pending`: its answer is
+    // then recognised like a late token of the stack, and put down on arrival.
+    if (pending?.action === "acquire") stackRequests.add(pending.componentId);
+    // bottom first: each release brings its token above the others, so the
+    // stack keeps its order
     for (const counter of [...hand]) requestRelease(counter);
     return;
   }
@@ -1515,7 +1612,8 @@ function onMouseDown(event: MouseEvent): void {
       grabbedName = hit.name;
       grabWorldX = lx;
       grabWorldY = ly;
-      requestAcquire(hit);
+      // only a press that really asked for the token can grow into a stack
+      if (requestAcquire(hit)) armLongPress(sx, sy);
       return;
     }
 
@@ -1571,6 +1669,14 @@ function onMouseMove(event: MouseEvent): void {
     lastMouseX = sx;
     lastMouseY = sy;
     return;
+  }
+
+  // the pointer left the press point: this is a drag, not a long press
+  if (
+    longPressTimer !== null &&
+    Math.hypot(sx - pressScreenX, sy - pressScreenY) > LONG_PRESS_SLACK
+  ) {
+    cancelLongPress();
   }
 
   // the left button was released where no mouseup reached the page
@@ -2014,10 +2120,14 @@ function handleServerMessage(raw: unknown): void {
   try {
     if (data.event === "acquire" || data.event === "release") {
       const answer = data as unknown as HandEvent;
+      // an acquire asked by a long press: several are in flight at once
+      const fromStack =
+        answer.event === "acquire" && stackRequests.delete(answer.component_id);
       const isOwnRequest =
-        pending?.action === answer.event && pending.componentId === answer.component_id;
+        fromStack ||
+        (pending?.action === answer.event && pending.componentId === answer.component_id);
 
-      if (isOwnRequest) {
+      if (isOwnRequest && !fromStack) {
         clearPending();
       }
 
@@ -2026,7 +2136,7 @@ function handleServerMessage(raw: unknown): void {
         return;
       }
 
-      applyHandEvent(answer, isOwnRequest);
+      applyHandEvent(answer, isOwnRequest, fromStack);
     } else if (data.event === "pick") {
       applyPick(data as unknown as PickEvent);
     } else if (data.event === "move") {

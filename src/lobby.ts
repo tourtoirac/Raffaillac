@@ -105,9 +105,6 @@ function pushStatus(text: string): void {
   renderStatus();
 }
 
-// messages reçus mais non journalisés (poll technique du serveur)
-const SILENT_EVENTS = new Set(["keep_alive"]);
-
 // refus d'adhésion qui méritent de rendre la modale : une saisie à corriger,
 // ou une raison que seul le serveur connaît (spectateurs non autorisés, trop de
 // spectateurs, partie pleine)
@@ -163,9 +160,7 @@ function refreshSessions(): void {
 }
 
 function handleServerMessage(data: ServerMessage): void {
-  if (!SILENT_EVENTS.has(data.event)) {
-    pushStatus(formatMessage(data));
-  }
+  pushStatus(formatMessage(data));
   try {
     if (data.event === "list_game") {
       handleListGame(data as unknown as ListGameEvent);
