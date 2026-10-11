@@ -82,8 +82,14 @@ serveur.
 ### Connexion
 
 - `ws/wsWorker.ts` est un **SharedWorker** : une seule WebSocket est partagée
-  par tous les onglets de la même origine. Il lit `/conf.json` (`host`, `port`)
-  et se reconnecte avec un délai exponentiel plafonné à 15 s.
+  par tous les onglets de la même origine. Il lit `conf.json` sous le chemin
+  public du build (`import.meta.env.BASE_URL`) et se reconnecte avec un délai
+  exponentiel plafonné à 15 s. Deux formes de `conf.json` : `host` + `port`
+  → `ws://host:port` (local), ou `path` → même hôte que la page, en `wss://`
+  si elle est servie en https (derrière un reverse proxy, ex. `/obg/ws`).
+- Chemin public : `OBG_BASE` au build (`vite.config.ts`, `ARG` du
+  `Dockerfile`), `/` par défaut, `/obg/` en production. Les `src` des
+  `game_json` restent des chemins absolus `/Games/...`, hors de ce préfixe.
 - `ws/wsClient.ts` expose `getSocket()` → `{send, setMessageHandler,
   setStateHandler}`, en singleton sur `window.obgSocket`. Les messages reçus
   avant `setMessageHandler` sont mis en tampon.
@@ -141,11 +147,41 @@ retournement local d'un `board_group`.
 
 ### Nationalités
 
-Facultatif. Seule règle : un pion qui porte une nationalité n'est pris que par
-un joueur de cette nationalité. Le serveur fait foi (erreur
-`wrong_nationality`) ; `canAcquire` dans `game.ts` évite seulement la requête,
-pour `requestAcquire` comme pour `requestPick`, et le dit dans le bandeau
-d'info. Le serveur annonce la
+Facultatif. Seule règle : un pion qui porte une nationalité n'est touché que
+par un joueur de cette nationalité. Le serveur fait foi (erreur
+`wrong_nationality`) ; `canAcquire` dans `game.ts` évite seulement la requête
+et le dit dans le bandeau d'info.
+
+**Toute règle qui interdit de prendre un pion interdit aussi de le tourner et
+de le retourner** : `modificationRefused` (miroir de `refuse_modification` de
+Tourtoirac) est appelé par `requestAcquire`, `requestRotate` et `requestFlip`.
+Une nouvelle règle s'ajoute là, pas dans chaque `request*`. Les zones de
+rotation ne s'affichent pas sur un pion qu'on ne peut pas toucher.
+
+Regard sur un pion retourné (`revealsFront`, section *Stack preview* de
+`game.ts`) : un joueur qui survole un pion **de sa nationalité** posé sur son
+dos voit sa face avant dans la fenêtre de survol, sur son écran seulement
+(`Counter.drawFront`). Un pion seul ouvre une fenêtre avec sa face ; dans une
+pile, une ligne de faces s'ajoute sous chaque ligne de pions. Jamais pour un
+spectateur. C'est un affichage local : rien n'est envoyé au serveur.
+
+Face cachée : Tourtoirac n'envoie la face qu'un pion à nationalité ne montre
+pas qu'aux joueurs de cette nationalité ; les autres reçoivent `front_src` ou
+`back_src` à `null`. `createCounter` met alors le dos à la place de la face
+avant, et `Counter.setFaces` charge la vraie image quand un `flip`, un `setup`
+ou un `pick` la révèle (d'où `frontImage` / `backImage` modifiables). Ne pas
+supposer qu'un `TokenItem` porte ses deux images.
+
+Avec `options.anonymous_id`, l'`id` des pions est un uuid tiré par le serveur :
+ne rien déduire d'un `id` côté client.
+
+`options.component_id_display` à `false` masque le nom et la position des
+pions dans le bandeau d'info (`showComponentId` dans `game.ts`, lu dans
+`handleSessionEvent`). Absent ou `true`, le bandeau s'affiche comme avant. Les
+messages de refus (« Pion réservé à … ») restent affichés, sans le nom. C'est
+un réglage purement client : Tourtoirac transmet `options` tel quel.
+
+Le serveur annonce la
 nationalité du siège dans `session_joined` (`myNationality` dans `game.ts`,
 affichée dans le bandeau après le pseudo) ; le lobby l'affiche après chaque
 pseudo. `Counter.nationality` reprend celle du pion (`TokenItem.nationality`),

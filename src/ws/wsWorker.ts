@@ -93,9 +93,15 @@ function handlePortMessage(event: MessageEvent): void {
 
 async function loadConfig(): Promise<void> {
   try {
-    const response = await fetch("/conf.json");
-    const config = await response.json() as { host: string; port: number };
-    wsUrl = `ws://${config.host}:${config.port}`;
+    const response = await fetch(`${import.meta.env.BASE_URL}conf.json`);
+    const config = await response.json() as { host?: string; port?: number; path?: string };
+    if (config.path) {
+      // Same origin as the page, behind a reverse proxy: wss:// when served over https.
+      const scheme = self.location.protocol === "https:" ? "wss" : "ws";
+      wsUrl = `${scheme}://${self.location.host}${config.path}`;
+    } else {
+      wsUrl = `ws://${config.host}:${config.port}`;
+    }
     configLoaded = true;
     connect();
   } catch (error) {

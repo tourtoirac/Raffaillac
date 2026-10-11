@@ -336,7 +336,9 @@ function loadComponents(components: SessionComponents | undefined): void {
 
 function createCounter(token: TokenItem): Counter {
   const img = new Image();
-  img.src = token.front_src;
+  // the server keeps back the hidden front of a token of another nationality:
+  // the back stands in for it until the token is turned over
+  img.src = token.front_src ?? token.back_src ?? "";
   // la face de dos est chargée tout de suite quand le jeu en donne une :
   // un pion sans back_src ne se retourne pas, et n'a rien à précharger
   let backImg: HTMLImageElement | null = null;
@@ -1078,7 +1080,7 @@ function requestPick(bag: Bag, x: number, y: number): void {
   if (bag.content.length === 0) return;
   // the server only draws among the tokens this player may take
   if (!bag.content.some(canAcquire)) {
-    counterInfoText = `${bag.name}  aucun pion de votre nationalité`;
+    counterInfoText = "Aucun pion de votre nationalité dans ce sac";
     return;
   }
   if (!isStarted) {
@@ -1129,6 +1131,7 @@ function applyPick(message: PickEvent): void {
   counter.inPlace = false;
   counter.initialX = state.initial_x ?? null;
   counter.initialY = state.initial_y ?? null;
+  counter.setFaces(state.front_src, state.back_src);
   if (state.side !== undefined) counter.setSide(state.side);
   if (!counters.includes(counter)) counters.push(counter);
 
@@ -1162,13 +1165,18 @@ let lastMouseY = 0;
 let panning = false;
 let counterInfoText = "";
 
+// options.component_id_display of the game: false hides the name and the
+// position of the tokens in the info bar. Absent, they are shown as before.
+let showComponentId = true;
+
 function counterPositionText(counter: Counter): string {
+  if (!showComponentId) return "";
   return `${counter.name}  x=${Math.floor(counter.x)}  y=${Math.floor(counter.y)}`;
 }
 
 function handInfoText(): string {
   const anchor = handAnchor ?? hand[0];
-  if (!anchor) return "";
+  if (!anchor || !showComponentId) return "";
   const label = hand.length > 1 ? `${anchor.name} +${hand.length - 1}` : anchor.name;
   return `${label}  x=${Math.floor(anchor.x)}  y=${Math.floor(anchor.y)}`;
 }
@@ -1230,6 +1238,7 @@ function applyCounterValue(message: CounterValueEvent): void {
 }
 
 function requestRotate(counter: Counter, direction: RotationDirection): void {
+  if (modificationRefused(counter)) return;
   const socket = getSocket();
   if (!socket) return;
 
@@ -1255,6 +1264,7 @@ function requestFlip(counter: Counter): void {
   // un pion qui n'a qu'une seule face ne se retourne pas, et on ne le demande
   // même pas au serveur : le double-clic doit rester sans effet
   if (!counter.flippable) return;
+  if (modificationRefused(counter)) return;
 
   // pas de retournement optimiste : on attend la face que le serveur renvoie,
   // comme pour la rotation. Sinon l'écran qui a cliqué montrerait un pion que
@@ -1268,6 +1278,8 @@ function requestFlip(counter: Counter): void {
 function applyFlip(message: FlipEvent): void {
   const counter = countersById.get(message.component_id);
   if (!counter) return;
+  // the face now shown may be one the server had kept back until this flip
+  counter.setFaces(message.front_src, message.back_src);
   counter.setSide(message.side);
 }
 
@@ -1277,21 +1289,33 @@ function canAcquire(counter: Counter): boolean {
   return counter.nationality === null || counter.nationality === myNationality;
 }
 
-function requestAcquire(counter: Counter): void {
+// Mirrors refuse_modification on the server: the rules that forbid taking a
+// token in hand forbid turning it and flipping it too. A new rule goes here,
+// and applies to the three actions at once.
+// Returns true when the action must not be sent; the player is told why.
+function modificationRefused(counter: Counter): boolean {
   if (!canAcquire(counter)) {
     // said in the info bar rather than in a window: a click on a token of
     // another side is common on a crowded map
-    counterInfoText = `${counter.name}  réservé à ${counter.nationality}`;
-    return;
+    // the refusal is always said; the name of the token only when the game shows it
+    counterInfoText = showComponentId
+      ? `${counter.name}  réservé à ${counter.nationality}`
+      : `Pion réservé à ${counter.nationality}`;
+    return true;
   }
   if (!isStarted) {
     warnGameNotStarted();
-    return;
+    return true;
   }
   if (missingPlayers.length > 0) {
     warnPlayersMissing();
-    return;
+    return true;
   }
+  return false;
+}
+
+function requestAcquire(counter: Counter): void {
+  if (modificationRefused(counter)) return;
   const socket = getSocket();
   if (!socket) return;
 
@@ -1533,10 +1557,29 @@ function previewCellSize(counter: Counter): [number, number] {
   ];
 }
 
+// A counter lying on its back keeps its front hidden from the table, but not
+// from the players of its nationality: they may look at it, on their own
+// screen only. A watcher only sees the faces shown on the table.
+function revealsFront(counter: Counter): boolean {
+  return (
+    !isWatcher &&
+    counter.side === "back" &&
+    counter.nationality !== null &&
+    counter.nationality === myNationality &&
+    counter.frontImage.complete
+  );
+}
+
 /**
- * Draws, in screen space, a popup holding every counter under the pointer when
- * at least two overlap there. Counters keep their stacking order (left to
- * right, then top to bottom), their face and their orientation.
+ * Draws, in screen space, a popup about the counters under the pointer.
+ *
+ * When at least two overlap there, it holds every one of them, in stacking
+ * order (left to right, then top to bottom), with their face and orientation.
+ * Under each line of counters, a second line shows the front of those lying
+ * on their back that this player is allowed to look at (revealsFront).
+ *
+ * A single counter gets a popup only when its front may be looked at: the
+ * popup then holds that front alone.
  */
 function drawStackPreview(): void {
   // while dragging, the held counters are the ones under the pointer
@@ -1545,7 +1588,8 @@ function drawStackPreview(): void {
   const [wx, wy] = screenToWorld(pointerScreenX, pointerScreenY);
   const [lx, ly] = flipPoint(wx, wy);
   const stack = countersAt(lx, ly).filter((counter) => counter.image.complete);
-  if (stack.length < 2) return;
+  const showCounters = stack.length >= 2;
+  if (!showCounters && !stack.some(revealsFront)) return;
 
   // uniform cells, sized on the largest counter of the stack
   let cellWidth = 0;
@@ -1562,10 +1606,19 @@ function drawStackPreview(): void {
   const room = Math.max(roomRight, roomLeft) - 2 * STACK_PREVIEW_PADDING;
   const maxColumns = Math.max(1, Math.floor((room + STACK_PREVIEW_GAP) / (cellWidth + STACK_PREVIEW_GAP)));
   const columns = Math.min(stack.length, maxColumns);
-  const rows = Math.ceil(stack.length / columns);
+
+  // the lines of the popup, top to bottom: each line of counters, followed by
+  // the line of their fronts when one of them may be looked at
+  const lines: { counters: Counter[]; fronts: boolean }[] = [];
+  for (let first = 0; first < stack.length; first += columns) {
+    const row = stack.slice(first, first + columns);
+    if (showCounters) lines.push({ counters: row, fronts: false });
+    if (row.some(revealsFront)) lines.push({ counters: row, fronts: true });
+  }
 
   const popupWidth = columns * cellWidth + (columns - 1) * STACK_PREVIEW_GAP + 2 * STACK_PREVIEW_PADDING;
-  const popupHeight = rows * cellHeight + (rows - 1) * STACK_PREVIEW_GAP + 2 * STACK_PREVIEW_PADDING;
+  const popupHeight =
+    lines.length * cellHeight + (lines.length - 1) * STACK_PREVIEW_GAP + 2 * STACK_PREVIEW_PADDING;
 
   // to the right of the pointer, or to its left when it would not fit
   let popupX = pointerScreenX + STACK_PREVIEW_OFFSET;
@@ -1588,23 +1641,40 @@ function drawStackPreview(): void {
   ctx.rect(popupX, popupY, popupWidth, popupHeight);
   ctx.clip();
 
-  stack.forEach((counter, index) => {
-    const column = index % columns;
-    const row = Math.floor(index / columns);
-    const cellX = popupX + STACK_PREVIEW_PADDING + column * (cellWidth + STACK_PREVIEW_GAP);
-    const cellY = popupY + STACK_PREVIEW_PADDING + row * (cellHeight + STACK_PREVIEW_GAP);
-    // the counter center lands on the cell center: rotation is around it
-    const centerX = cellX + cellWidth / 2;
-    const centerY = cellY + cellHeight / 2;
-    ctx.setTransform(
-      zoom,
-      0,
-      0,
-      zoom,
-      centerX - (counter.x + counter.width / 2) * zoom,
-      centerY - (counter.y + counter.height / 2) * zoom,
-    );
-    counter.draw(ctx);
+  lines.forEach((line, lineIndex) => {
+    const cellY = popupY + STACK_PREVIEW_PADDING + lineIndex * (cellHeight + STACK_PREVIEW_GAP);
+    if (line.fronts && showCounters) {
+      // a lighter band tells the line of hidden fronts from the stack itself
+      ctx.setTransform(1, 0, 0, 1, 0, 0);
+      ctx.fillStyle = "rgba(255, 215, 0, 0.18)";
+      ctx.fillRect(
+        popupX,
+        cellY - STACK_PREVIEW_GAP / 2,
+        popupWidth,
+        cellHeight + STACK_PREVIEW_GAP,
+      );
+    }
+    line.counters.forEach((counter, column) => {
+      // a front line keeps each front under its counter: the other cells stay empty
+      if (line.fronts && !revealsFront(counter)) return;
+      const cellX = popupX + STACK_PREVIEW_PADDING + column * (cellWidth + STACK_PREVIEW_GAP);
+      // the counter center lands on the cell center: rotation is around it
+      const centerX = cellX + cellWidth / 2;
+      const centerY = cellY + cellHeight / 2;
+      ctx.setTransform(
+        zoom,
+        0,
+        0,
+        zoom,
+        centerX - (counter.x + counter.width / 2) * zoom,
+        centerY - (counter.y + counter.height / 2) * zoom,
+      );
+      if (line.fronts) {
+        counter.drawFront(ctx);
+      } else {
+        counter.draw(ctx);
+      }
+    });
   });
 
   ctx.restore();
@@ -1780,7 +1850,8 @@ function draw(): void {
   // les zones de rotation par-dessus le pion survolé. Elles ne s'affichent que
   // pour un joueur, pion orientable, main vide : un pion qu'on s'apprête à
   // saisir n'a pas besoin de ce repère, et un spectateur n'agit pas sur le jeu
-  if (!isWatcher && hand.length === 0 && hoveredCounter?.orientable) {
+  // nor does a token this player may not touch
+  if (!isWatcher && hand.length === 0 && hoveredCounter?.orientable && canAcquire(hoveredCounter)) {
     const counter = hoveredCounter;
     drawAtDisplay(ctx, counter.x, counter.y, counter.width, counter.height, () => {
       counter.drawRotationZones(ctx);
@@ -2108,6 +2179,7 @@ function applySetup(message: SetupEvent): void {
       token.initialY = typeof state.initial_y === "number" ? state.initial_y : state.y;
       if (typeof state.in_place === "boolean") token.inPlace = state.in_place;
       // un pion sans dos garde sa face : le serveur ne l'a pas retournee
+      token.setFaces(state.front_src, state.back_src);
       if (state.side !== undefined) token.setSide(state.side);
       continue;
     }
@@ -2161,6 +2233,9 @@ function handleSessionEvent(data: GameServerMessage): void {
   storeSession(session);
   updateSessionInfo();
   setupFixButton(session);
+  showComponentId = session.options?.component_id_display !== false;
+  // a name already on screen goes away with the option
+  if (!showComponentId) counterInfoText = "";
 
   // la situation initiale n'est chargée qu'une seule fois. Le test sur
   // counters ne suffisait plus : une partie sans pion le relisait à chaque

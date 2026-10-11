@@ -11,7 +11,9 @@ COPY index.html game.html ./
 COPY public ./public
 COPY src ./src
 
-RUN npm run build
+# Public path of the application ("/obg/" when served under a sub-path)
+ARG OBG_BASE=/
+RUN OBG_BASE=$OBG_BASE npm run build
 
 # ---- Étape 2 : serveur statique ----
 FROM nginx:alpine

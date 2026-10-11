@@ -57,8 +57,15 @@ export interface HexGridItem {
 export interface TokenItem {
   kind: "token";
   id: string;
-  front_src: string;
-  /** face de dos : absente ou nulle sur un pion qui ne se retourne pas */
+  /**
+   * null when the server keeps this face back: the hidden face of a token of
+   * a nationality is only sent to the players of that nationality
+   */
+  front_src: string | null;
+  /**
+   * face de dos : absente ou nulle sur un pion qui ne se retourne pas, or
+   * kept back by the server like front_src
+   */
   back_src?: string | null;
   /** face affichée, telle que le serveur l'a rendue */
   side?: "front" | "back";
@@ -209,6 +216,18 @@ export interface SessionOptions {
    * repeats them, cleaned, in Session.nationalities: read that one.
    */
   nationalities?: string[];
+  /**
+   * true: the server replaced the id of every token by a random one when the
+   * session was created, so that an id does not tell what a token is
+   */
+  anonymous_id?: boolean;
+  /** set by the server once the ids have been replaced */
+  anonymized?: boolean;
+  /**
+   * false: the info bar does not show the name and the position of the
+   * tokens. Absent or true, it does.
+   */
+  component_id_display?: boolean;
 }
 
 export interface Session {
@@ -382,6 +401,9 @@ export interface ComponentState {
   origin_y?: number | null;
   /** face affichée, pour un pion que le setup retourne */
   side?: "front" | "back";
+  /** the faces the server lets this client know; null for one kept back */
+  front_src?: string | null;
+  back_src?: string | null;
 }
 
 // le joueur a remis le rectangle vert sur tous les jetons
@@ -445,6 +467,7 @@ export interface FlipEvent {
   component_id: string;
   /** face désormais affichée */
   side: "front" | "back";
-  front_src: string;
-  back_src: string;
+  /** the face now shown is always given; the other is null when kept back */
+  front_src: string | null;
+  back_src: string | null;
 }

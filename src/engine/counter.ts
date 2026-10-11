@@ -18,14 +18,18 @@ export type CounterSide = "front" | "back";
 
 export class Counter {
   readonly name: string;
-  /** image de la face avant */
-  readonly frontImage: HTMLImageElement;
+  /**
+   * image de la face avant. When the server keeps the front back (a token of
+   * another nationality lying on its back), it holds the back picture until
+   * the token is turned over and setFaces receives the real one.
+   */
+  frontImage: HTMLImageElement;
   /**
    * image de la face arrière, absente sur un pion qui ne se retourne pas.
    * Les deux images sont chargées d'emblée : retourner un pion ne doit pas
    * faire clignoter une image pas encore téléchargée.
    */
-  readonly backImage: HTMLImageElement | null;
+  backImage: HTMLImageElement | null;
   readonly width: number;
   readonly height: number;
   /** le jeu autorise-t-il à repositionner ce pion, rectangle vert compris */
@@ -130,6 +134,22 @@ export class Counter {
   }
 
   /**
+   * Takes the faces the server lets this client know. A face it keeps back
+   * comes as null and changes nothing; a face this client did not have yet
+   * (the token has just been turned over) is loaded now.
+   */
+  setFaces(frontSrc?: string | null, backSrc?: string | null): void {
+    if (frontSrc && this.frontImage.getAttribute("src") !== frontSrc) {
+      this.frontImage = new Image();
+      this.frontImage.src = frontSrc;
+    }
+    if (backSrc && this.backImage?.getAttribute("src") !== backSrc) {
+      this.backImage = new Image();
+      this.backImage.src = backSrc;
+    }
+  }
+
+  /**
    * Affiche la face que le serveur vient de désigner. Une face arrière sans
    * image reste la face avant : le client ne montre jamais une image absente.
    */
@@ -189,6 +209,19 @@ export class Counter {
     ctx.rotate((this.orientation * Math.PI) / 180);
     ctx.translate(-this.centerX, -this.centerY);
     this.drawUpright(ctx);
+    ctx.restore();
+  }
+
+  /**
+   * The front face alone, at the place and angle of the counter, whatever
+   * face it shows: used to let a player look at a counter lying on its back.
+   */
+  drawFront(ctx: CanvasRenderingContext2D): void {
+    ctx.save();
+    ctx.translate(this.centerX, this.centerY);
+    ctx.rotate((this.orientation * Math.PI) / 180);
+    ctx.translate(-this.centerX, -this.centerY);
+    ctx.drawImage(this.frontImage, this.x, this.y, this.width, this.height);
     ctx.restore();
   }
 
