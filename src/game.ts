@@ -923,7 +923,8 @@ function stepEdgeScroll(dt: number): void {
   cameraX += (vx * dt) / zoom;
   cameraY += (vy * dt) / zoom;
 
-  if (hand.length === 0) return;
+  // a hand the button does not hold stays where it is, as in onMouseMove
+  if (hand.length === 0 || !dragging) return;
 
   // La position de la main se déduit du pointeur, pas du temps : sinon le pion
   // se déplacerait deux fois, une fois avec la carte et une fois avec la souris.
@@ -957,6 +958,21 @@ let handWorldX = 0;
 let handWorldY = 0;
 let lastMouseWorldX = 0;
 let lastMouseWorldY = 0;
+
+// Drag and drop: the left button going down on a token takes it in hand, the
+// hand follows the pointer while the button stays down, and the button coming
+// up puts it down. `dragging` is that button state, as far as the hand goes.
+let dragging = false;
+
+// The button came up before the server answered the acquire or the pick: the
+// token is put down as soon as it arrives in the hand.
+let releaseOnArrival = false;
+
+// The token the button went down on, and where: its acquire is answered a
+// moment later, and the token then catches up with the pointer.
+let grabbedName: string | null = null;
+let grabWorldX = 0;
+let grabWorldY = 0;
 
 // la main reste verrouillée tant que le serveur n'a pas répondu
 function setPending(action: PendingAction, componentId: string, requestId?: string): void {
@@ -1033,8 +1049,11 @@ function applyHandEvent(answer: HandEvent, isOwnRequest: boolean): void {
     }
   }
 
-  // les messages des autres joueurs sont affichés plus tard
-  if (!isOwnRequest) return;
+  // les messages des autres joueurs sont affichés plus tard. A release of a
+  // token of this hand always empties it, whoever the answer is matched to:
+  // the server no longer holds it for this player.
+  const leavesHand = answer.event === "release" && hand.includes(counter);
+  if (!isOwnRequest && !leavesHand) return;
 
   if (answer.event === "acquire") {
     if (hand.includes(counter)) return;
@@ -1042,6 +1061,18 @@ function applyHandEvent(answer: HandEvent, isOwnRequest: boolean): void {
     counter.held = true;
     hand.push(counter);
     handAnchor = counter;
+
+    if (releaseOnArrival) {
+      // the button is already up: the token goes straight back down
+      releaseOnArrival = false;
+      requestRelease(counter);
+    } else if (dragging && grabbedName === counter.name) {
+      // the pointer moved while the server was answering
+      counter.x += lastMouseWorldX - grabWorldX;
+      counter.y += lastMouseWorldY - grabWorldY;
+      movesDirty = true;
+    }
+    grabbedName = null;
   } else {
     const index = hand.indexOf(counter);
     if (index >= 0) hand.splice(index, 1);
@@ -1137,8 +1168,8 @@ function applyPick(message: PickEvent): void {
   if (!counters.includes(counter)) counters.push(counter);
 
   if (isOwnRequest) {
-    // the pointer may have moved since the click: the token comes out under
-    // it, so that a click on it releases it
+    // the pointer may have moved since the button went down: the token comes
+    // out under it, and is put down where the button comes up
     counter.x = lastMouseWorldX - counter.width / 2;
     counter.y = lastMouseWorldY - counter.height / 2;
     movesDirty = true;
@@ -1158,6 +1189,7 @@ function applyPick(message: PickEvent): void {
 // MouseEvent.button values, and the MouseEvent.buttons bit of the right button
 const MOUSE_LEFT = 0;
 const MOUSE_RIGHT = 2;
+const MOUSE_LEFT_MASK = 1;
 const MOUSE_RIGHT_MASK = 2;
 
 let lastMouseX = 0;
@@ -1343,6 +1375,21 @@ function requestRelease(counter: Counter): void {
   console.log("[WS] Envoyé :", JSON.stringify(message));
 }
 
+// The left button came up: whatever is in hand is put down where it is.
+function dropHand(): void {
+  if (!dragging) return;
+  dragging = false;
+
+  if (hand.length > 0) {
+    for (const counter of [...hand]) requestRelease(counter);
+    return;
+  }
+  // the answer to the acquire or to the pick is still on its way
+  if (pending?.action === "acquire" || pending?.action === "pick") {
+    releaseOnArrival = true;
+  }
+}
+
 function onMouseDown(event: MouseEvent): void {
   const sx = event.offsetX;
   const sy = event.offsetY;
@@ -1361,6 +1408,8 @@ function onMouseDown(event: MouseEvent): void {
     event.preventDefault();
     return;
   }
+  // a drag that leaves the canvas must not select the text of the page
+  event.preventDefault();
   const [wx, wy] = screenToWorld(sx, sy);
 
   // le bouton "fixe la position" est posé dans le monde, comme les composants
@@ -1436,14 +1485,19 @@ function onMouseDown(event: MouseEvent): void {
       }
     }
 
-    // clic sur un composant déjà en main : demande de relâchement
-    const held = hand.find((counter) => counter.contains(lx, ly));
-    if (held !== undefined) {
-      requestRelease(held);
+    // A token is still in hand without the button being down (session
+    // resumed, answer that came late): the press takes the hand over, and the
+    // button coming up puts it down like any other.
+    if (hand.length > 0) {
+      dragging = true;
+      releaseOnArrival = false;
+      handWorldX = lx;
+      handWorldY = ly;
       return;
     }
 
-    // clic sur un pion : demande d'acquisition
+    // button down on a token: it is asked for, and follows the pointer until
+    // the button comes up
     const hit = hitCounter(lx, ly);
     if (hit !== null) {
       // avant de le prendre en main, on vérifie si le clic visait une zone de
@@ -1456,6 +1510,11 @@ function onMouseDown(event: MouseEvent): void {
           return;
         }
       }
+      dragging = true;
+      releaseOnArrival = false;
+      grabbedName = hit.name;
+      grabWorldX = lx;
+      grabWorldY = ly;
       requestAcquire(hit);
       return;
     }
@@ -1464,6 +1523,10 @@ function onMouseDown(event: MouseEvent): void {
     // on the bag is drawn above it and was taken first.
     const clickedBag = hitBag(bags, lx, ly);
     if (clickedBag !== null) {
+      // the token drawn comes out under the pointer, already being dragged
+      dragging = true;
+      releaseOnArrival = false;
+      grabbedName = null;
       requestPick(clickedBag, lx, ly);
       return;
     }
@@ -1510,7 +1573,13 @@ function onMouseMove(event: MouseEvent): void {
     return;
   }
 
-  if (hand.length > 0) {
+  // the left button was released where no mouseup reached the page
+  if (dragging && (event.buttons & MOUSE_LEFT_MASK) === 0) {
+    dropHand();
+  }
+
+  // the hand only follows the pointer while the button holds it
+  if (hand.length > 0 && dragging) {
     const dx = lx - handWorldX;
     const dy = ly - handWorldY;
     for (const counter of hand) {
@@ -1527,9 +1596,12 @@ function onMouseMove(event: MouseEvent): void {
   lastMouseY = sy;
 }
 
+// Listened on the canvas and on the window: the same mouseup may come twice,
+// dropHand only acts on the first.
 function onMouseUp(event: MouseEvent): void {
   // only releasing the right button ends the camera move
   if (event.button === MOUSE_RIGHT) panning = false;
+  if (event.button === MOUSE_LEFT) dropHand();
 }
 
 // -------------------------------------------------
