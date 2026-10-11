@@ -51,6 +51,7 @@ prétendre avoir couvert une régression. La seule vérification possible est
 | `engine/hex_grid.ts` | Grille hexagonale d'un plateau (`grid` du `game_json`) : même calcul que `Tourtoirac/Components/hex_grid.py` |
 | `ws/wsClient.ts` `wsWorker.ts` | WebSocket, exécuté dans un **SharedWorker** |
 | `gameLock.ts`      | Une seule page de jeu par navigateur (Web Lock `obg_game`) |
+| `serverErrors.ts`  | Texte de l'erreur `invalid_component` (composant du `game_json` mal décrit), affiché par le lobby et la page de jeu |
 | `navigation.ts`    | URL `index.html` ↔ `game.html`, avec `?game=<nom>` pour garder l'onglet |
 | `session.ts`       | `sessionStorage` : session courante (`obg_session`) et identité (`obg_player_identity`) |
 

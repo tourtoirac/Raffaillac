@@ -5,16 +5,15 @@ import type {
   ActiveSession,
   GameInfo,
   ListGameEvent,
+  ServerErrorEvent,
   Session,
   SessionCreatedEvent,
   SessionsInfoEvent,
 } from "./types";
+import { invalidComponentMessage } from "./serverErrors";
 import { getSocket } from "./ws/wsClient";
 import type { SocketStateMessage } from "./ws/wsClient";
 
-interface ServerErrorEvent {
-  error?: { code?: string; message?: string };
-}
 
 interface ServerMessage {
   event: string;
@@ -189,6 +188,12 @@ function handleServerMessage(data: ServerMessage): void {
           "Impossible de lancer la partie : plusieurs composants de ce jeu " +
             "portent le même identifiant. Le jeu doit être corrigé.",
         );
+      } else if (code === "invalid_component") {
+        // Same on creation and on join: the game_json is broken, the modal
+        // stays closed and the message names the component to fix.
+        openingGameName = null;
+        lastJoinAttempt = null;
+        window.alert(invalidComponentMessage((data as unknown as ServerErrorEvent).error));
       }
     } else if (data.event === "session_players_changed") {
       // un joueur est entré ou sorti : on redemande la liste pour rafraîchir

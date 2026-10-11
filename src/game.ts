@@ -19,6 +19,7 @@ import { Dice } from "./engine/dice";
 import type { DicePool } from "./engine/dice";
 import { lobbyReturnUrl, originGameName } from "./navigation";
 import { acquireGameLock, GAME_OPEN_ELSEWHERE_MESSAGE } from "./gameLock";
+import { invalidComponentMessage } from "./serverErrors";
 import { clearSession, loadPlayerIdentity, loadSession, storeSession } from "./session";
 import type {
   AcquireEvent,
@@ -2246,6 +2247,18 @@ function reportServerError(data: ServerErrorEvent): void {
       "Cette partie a commencé sans toi.\n\n" +
         "Tu reviens au lobby : tu peux la regarder en spectateur.",
     );
+    window.location.href = leaveUrl;
+    return;
+  }
+
+  // the stored game_json of this session cannot be rebuilt by the server:
+  // there is no table to show, the player goes back to the lobby
+  if (code === "invalid_component") {
+    if (leavingDeadSession) return;
+    leavingDeadSession = true;
+    clearPending();
+    clearSession();
+    window.alert(invalidComponentMessage(data.error));
     window.location.href = leaveUrl;
     return;
   }

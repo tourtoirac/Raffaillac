@@ -7,11 +7,18 @@ const FALLBACK_STROKE = "#3a2614";
 // Outline shown while a held token hovers over the bag: releasing it there
 // drops it in.
 const TARGET_COLOR = "orange";
-// Badge with the number of tokens left, in the bottom-right corner. Its size
+// Badge with the number of tokens left, in the bottom-right corner, drawn
+// only when the game asks for it ("count": true). Its size
 // follows the bag, within bounds that keep the number readable.
 const BADGE_RATIO = 0.3;
 const BADGE_MIN_SIZE = 18;
 const BADGE_MAX_SIZE = 44;
+// Caption written under the bag when the game gives it a text. Its size
+// follows the bag, within bounds that keep it readable.
+const TEXT_RATIO = 0.18;
+const TEXT_MIN_SIZE = 12;
+const TEXT_MAX_SIZE = 28;
+const TEXT_GAP = 4;
 
 /**
  * A bag: a fixed component holding tokens out of sight. A token released over
@@ -28,6 +35,10 @@ export interface Bag {
   y: number;
   readonly width: number;
   readonly height: number;
+  /** caption written under the bag, or null when the game gives none */
+  readonly text: string | null;
+  /** whether the badge with the number of tokens left is drawn */
+  readonly showsCount: boolean;
   /** the tokens inside: they are not on the table and are never drawn */
   content: Counter[];
 }
@@ -45,6 +56,8 @@ export function createBag(item: BagItem, content: Counter[]): Bag {
     y: item.y,
     width: item.width,
     height: item.height,
+    text: typeof item.text === "string" && item.text !== "" ? item.text : null,
+    showsCount: item.count === true,
     content,
   };
 }
@@ -68,7 +81,8 @@ export function bagUnder(bags: Bag[], counter: Counter): Bag | null {
 }
 
 /**
- * Draws the bag and the number of tokens it holds.
+ * Draws the bag, the number of tokens it holds when the game asks for it,
+ * and its caption.
  * @param targeted a held token hovers over the bag and would fall into it
  */
 export function drawBag(ctx: CanvasRenderingContext2D, bag: Bag, targeted: boolean): void {
@@ -90,26 +104,47 @@ export function drawBag(ctx: CanvasRenderingContext2D, bag: Bag, targeted: boole
     ctx.strokeRect(bag.x, bag.y, bag.width, bag.height);
   }
 
-  const size = Math.max(
-    BADGE_MIN_SIZE,
-    Math.min(BADGE_MAX_SIZE, Math.min(bag.width, bag.height) * BADGE_RATIO),
-  );
-  const centerX = bag.x + bag.width - size / 2;
-  const centerY = bag.y + bag.height - size / 2;
-  ctx.beginPath();
-  ctx.arc(centerX, centerY, size / 2, 0, Math.PI * 2);
-  // an empty bag reads at a glance: its badge turns gray
-  ctx.fillStyle = bag.content.length > 0 ? "black" : "gray";
-  ctx.fill();
-  ctx.lineWidth = 2;
-  ctx.strokeStyle = "white";
-  ctx.stroke();
+  if (bag.showsCount) {
+    const size = Math.max(
+      BADGE_MIN_SIZE,
+      Math.min(BADGE_MAX_SIZE, Math.min(bag.width, bag.height) * BADGE_RATIO),
+    );
+    const centerX = bag.x + bag.width - size / 2;
+    const centerY = bag.y + bag.height - size / 2;
+    ctx.beginPath();
+    ctx.arc(centerX, centerY, size / 2, 0, Math.PI * 2);
+    // an empty bag reads at a glance: its badge turns gray
+    ctx.fillStyle = bag.content.length > 0 ? "black" : "gray";
+    ctx.fill();
+    ctx.lineWidth = 2;
+    ctx.strokeStyle = "white";
+    ctx.stroke();
 
-  ctx.fillStyle = "white";
-  ctx.font = `bold ${Math.round(size * 0.55)}px Arial`;
-  ctx.textAlign = "center";
-  ctx.textBaseline = "middle";
-  ctx.fillText(String(bag.content.length), centerX, centerY);
+    ctx.fillStyle = "white";
+    ctx.font = `bold ${Math.round(size * 0.55)}px Arial`;
+    ctx.textAlign = "center";
+    ctx.textBaseline = "middle";
+    ctx.fillText(String(bag.content.length), centerX, centerY);
+  }
+
+  if (bag.text !== null) {
+    const textSize = Math.max(TEXT_MIN_SIZE, Math.min(TEXT_MAX_SIZE, bag.height * TEXT_RATIO));
+    ctx.font = `bold ${Math.round(textSize)}px Arial`;
+    ctx.textAlign = "center";
+    ctx.textBaseline = "top";
+    ctx.lineJoin = "round";
+    ctx.lineWidth = 3;
+    ctx.strokeStyle = "white";
+    ctx.fillStyle = "black";
+    // the white outline keeps the caption readable on any board; a line
+    // break in the text starts a new line
+    bag.text.split("\n").forEach((line, index) => {
+      const textX = bag.x + bag.width / 2;
+      const textY = bag.y + bag.height + TEXT_GAP + index * textSize * 1.2;
+      ctx.strokeText(line, textX, textY);
+      ctx.fillText(line, textX, textY);
+    });
+  }
 
   ctx.restore();
 }

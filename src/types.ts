@@ -188,6 +188,10 @@ export interface BagItem {
   height: number;
   /** picture of the bag; absent or null, the client draws a plain box */
   src?: string | null;
+  /** caption written under the bag; absent, null or empty, nothing is written */
+  text?: string | null;
+  /** true shows the number of tokens left in the bag; absent, it is hidden */
+  count?: boolean;
   components: TokenItem[];
 }
 
@@ -346,7 +350,17 @@ export interface SessionClosedEvent {
 // refus du serveur, always reported with a stable code the client can test
 export interface ServerErrorEvent {
   event?: "error";
-  error?: { code?: string; message?: string };
+  error?: {
+    code?: string;
+    message?: string;
+    // only with "invalid_component": the component of the game_json that the
+    // server could not build
+    component_id?: string | null;
+    kind?: string | null;
+    list?: string | null;
+    parent_id?: string | null;
+    missing_field?: string | null;
+  };
 }
 
 // accusé d'acquisition / de relâchement, diffusé à tous les joueurs de la session
