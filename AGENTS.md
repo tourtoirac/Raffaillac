@@ -137,6 +137,7 @@ titre :
 | *Dessin* | `draw()` : plateaux, compteurs, sacs (avec le nombre de pions restants), dés, pions, boutons, infobulles |
 | *Messages du serveur Tourtoirac* | `handleServerMessage` : une branche `if/else` par `event` → fonctions `apply*` |
 | *Mise en place du jeu* | `allComponentsLoaded`, `maybeRequestSetup`, `applySetup`, `handleSessionEvent` |
+| *Loading overlay* | Voile `#loading-overlay` de `game.html` par-dessus le canvas : `componentImages` (liste unique des images attendues, aussi utilisée par `allComponentsLoaded`), `updateLoadingOverlay` appelé à chaque frame jusqu'à ce que la session soit reçue, les images chargées et le setup appliqué (attente du setup plafonnée à `SETUP_WAIT_MS`). Premier chargement seulement |
 | *Initialisation* | Liens retour au lobby et clôture (owner), `onCloseSession` |
 | *Boucle du jeu*, *Événements* | `requestAnimationFrame(gameLoop)` : défilement, `draw`, `flushMoves` ; écouteurs canvas |
 

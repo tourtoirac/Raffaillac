@@ -73,6 +73,35 @@
       display: flex;
       padding: 12px;
       box-sizing: border-box;
+      position: relative;
+    }
+    /* Covers the table, not the header: leaving the game stays possible
+       while the images load. */
+    #loading-overlay {
+      position: absolute;
+      inset: 0;
+      display: flex;
+      flex-direction: column;
+      align-items: center;
+      justify-content: center;
+      gap: 14px;
+      background: #2b2b2b;
+      color: #fff;
+      font-size: 18px;
+      text-align: center;
+    }
+    #loading-overlay[hidden] {
+      display: none;
+    }
+    #loading-bar {
+      width: min(420px, 70%);
+      height: 10px;
+      accent-color: #ffd700;
+    }
+    #loading-warning {
+      font-size: 14px;
+      color: #ff8a80;
+      min-height: 1em;
     }
     #gameCanvas {
       width: 100%;
@@ -100,6 +129,12 @@
 
   <div id="game-wrapper">
     <canvas id="gameCanvas"></canvas>
+    <!-- shown until every image is loaded and the initial setup is applied -->
+    <div id="loading-overlay" role="status" aria-live="polite">
+      <span id="loading-text">Chargement en cours…</span>
+      <progress id="loading-bar" max="1" value="0"></progress>
+      <span id="loading-warning"></span>
+    </div>
   </div>
 
   <script type="module" src="/src/game.ts"></script>

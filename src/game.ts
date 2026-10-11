@@ -2120,22 +2120,87 @@ function applyFixPositions(message: FixPositionsEvent): void {
 // changerait de place sous les yeux du joueur, et un plateau pas encore connu
 // ferait cadrer la caméra sur un monde qui n'est plus le bon.
 function allComponentsLoaded(): boolean {
-  if (!allBoardsLoaded(boards)) return false;
-  for (const counter of counters) {
-    if (!counter.image.complete) return false;
-  }
-  for (const dice of dices) {
-    for (const face of dice.faces.values()) {
-      if (!face.complete) return false;
-    }
-  }
+  return componentImages().every((image) => image.complete);
+}
+
+// Every image the table needs before it can be shown: the single list behind
+// allComponentsLoaded and the progress of the loading overlay.
+function componentImages(): HTMLImageElement[] {
+  const images = boards.map((board) => board.image);
+  for (const counter of counters) images.push(counter.image);
+  for (const dice of dices) images.push(...dice.faces.values());
   for (const bag of bags) {
-    if (bag.image !== null && !bag.image.complete) return false;
-    for (const counter of bag.content) {
-      if (!counter.image.complete) return false;
-    }
+    if (bag.image !== null) images.push(bag.image);
+    for (const counter of bag.content) images.push(counter.image);
   }
-  return true;
+  return images;
+}
+
+// -------------------------------------------------
+// Loading overlay
+// -------------------------------------------------
+
+const loadingOverlay = document.getElementById("loading-overlay");
+const loadingText = document.getElementById("loading-text");
+const loadingBar = document.getElementById("loading-bar") as HTMLProgressElement | null;
+const loadingWarning = document.getElementById("loading-warning");
+
+// has the server described the table since this page opened
+let sessionSynced = false;
+
+// the overlay is for the first load only: an image revealed later (flip, pick)
+// must not hide the table again
+let loadingDone = loadingOverlay === null;
+
+// when the last image arrived, in ms: the setup answer is not awaited forever,
+// a table slightly out of place is better than a blocked page
+let imagesReadyAt = 0;
+const SETUP_WAIT_MS = 8000;
+
+// Called on every frame until the table is ready: session received, every
+// image loaded, and the initial setup applied so that no piece jumps into
+// place in front of the player. A watcher does not wait for the setup, which
+// only a player can request.
+function updateLoadingOverlay(): void {
+  if (loadingDone || loadingOverlay === null) return;
+
+  if (!sessionSynced) {
+    if (loadingText) loadingText.textContent = "Connexion à la partie…";
+    return;
+  }
+
+  const images = componentImages();
+  const loaded = images.filter((image) => image.complete).length;
+  // a broken image is "complete" for the browser: it must not block the table,
+  // but it is reported instead of being silently ignored
+  const failed = images.filter(
+    (image) => image.complete && image.naturalWidth === 0 && image.getAttribute("src"),
+  ).length;
+
+  if (loaded === images.length && imagesReadyAt === 0) imagesReadyAt = performance.now();
+  const setupSettled =
+    pendingSetup.length === 0 || isWatcher || performance.now() - imagesReadyAt > SETUP_WAIT_MS;
+
+  if (loaded === images.length && setupSettled) {
+    loadingDone = true;
+    loadingOverlay.hidden = true;
+    if (failed > 0) console.warn(`[game] ${failed} image(s) introuvable(s)`);
+    return;
+  }
+
+  if (loadingText) {
+    loadingText.textContent =
+      loaded < images.length
+        ? `Chargement en cours… ${loaded} / ${images.length} images`
+        : "Mise en place de la partie…";
+  }
+  if (loadingBar) {
+    loadingBar.max = Math.max(1, images.length);
+    loadingBar.value = loaded;
+  }
+  if (loadingWarning) {
+    loadingWarning.textContent = failed > 0 ? `${failed} image(s) introuvable(s)` : "";
+  }
 }
 
 // Le client ne choisit aucune position : il dit seulement "tout est charge, vous
@@ -2252,6 +2317,7 @@ function handleSessionEvent(data: GameServerMessage): void {
     setupRead = true;
     pendingSetup = session.setup ?? [];
   }
+  sessionSynced = true;
 }
 
 // Le serveur annonce l'état de la partie : démarrée ou non, et qui manque.
@@ -2481,6 +2547,7 @@ function gameLoop(): void {
 
   stepEdgeScroll(dt);
   draw();
+  updateLoadingOverlay();
   flushMoves();
   window.requestAnimationFrame(gameLoop);
 }
