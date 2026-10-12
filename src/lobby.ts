@@ -4,6 +4,7 @@ import { storePlayerIdentity, storeSession } from "./session";
 import type {
   ActiveSession,
   GameInfo,
+  GameType,
   ListGameEvent,
   ServerErrorEvent,
   Session,
@@ -24,6 +25,7 @@ interface ServerMessage {
 }
 
 const statusElement = document.getElementById("status") as HTMLDivElement;
+const typeTabsContainer = document.getElementById("type-tabs") as HTMLDivElement;
 const tabsContainer = document.getElementById("tabs-container") as HTMLDivElement;
 const tablesContainer = document.getElementById("tables-container") as HTMLDivElement;
 
@@ -52,9 +54,53 @@ function selectedGameIndex(gameNames: string[]): number {
   return 0;
 }
 
-// The server decides which games are offered: one tab per game of sessions_info
-function visibleGameNames(): string[] {
+// The types of game, in the order of their tabs. Chabanas says which one a
+// game belongs to; a game it gives no type to is filed as a wargame.
+const GAME_TYPES: GameType[] = ["Boardgame", "Wargame"];
+const DEFAULT_GAME_TYPE: GameType = "Wargame";
+
+// type tab chosen by the player: read from ?type=Wargame, then kept there
+let selectedType: GameType | null = readGameType(
+  new URLSearchParams(window.location.search).get("type"),
+);
+
+function readGameType(value: string | null | undefined): GameType | null {
+  return GAME_TYPES.find((type) => type.toLowerCase() === value?.toLowerCase()) ?? null;
+}
+
+function gameTypeOf(gameName: string): GameType {
+  return readGameType(gameInfo[gameName]?.type) ?? DEFAULT_GAME_TYPE;
+}
+
+// every game the server offers: one entry per game of sessions_info
+function offeredGameNames(): string[] {
   return Object.keys(sessionsData).sort((a, b) => a.localeCompare(b));
+}
+
+// The type tab shown: the one the player chose, else the one of the game the
+// page was opened on (?game=), else the first type that has a game.
+function activeGameType(): GameType {
+  if (selectedType) return selectedType;
+  const offered = offeredGameNames();
+  const wanted = selectedGame?.toLowerCase();
+  const opened = offered.find((name) => name.toLowerCase() === wanted);
+  if (opened) return gameTypeOf(opened);
+  return GAME_TYPES.find((type) => offered.some((name) => gameTypeOf(name) === type)) ?? GAME_TYPES[0];
+}
+
+function selectGameType(type: GameType): void {
+  selectedType = type;
+  const url = new URL(window.location.href);
+  url.searchParams.set("type", type);
+  window.history.replaceState(null, "", url);
+  renderAll();
+}
+
+// The server decides which games are offered; the lobby lists those of the
+// type tab shown, one tab per game.
+function visibleGameNames(): string[] {
+  const type = activeGameType();
+  return offeredGameNames().filter((name) => gameTypeOf(name) === type);
 }
 
 // nom du jeu réellement affiché : selectedGame peut être absent de la liste
@@ -579,7 +625,23 @@ function hideError(id: string): void {
 // Rendu du lobby
 // -------------------------------------------------
 
+function renderTypeTabs(): void {
+  const active = activeGameType();
+  typeTabsContainer.replaceChildren(
+    ...GAME_TYPES.map((type) => {
+      const btn = document.createElement("button");
+      btn.className = "type-tab" + (type === active ? " active" : "");
+      btn.textContent = type;
+      btn.setAttribute("role", "tab");
+      btn.setAttribute("aria-selected", String(type === active));
+      btn.onclick = () => selectGameType(type);
+      return btn;
+    }),
+  );
+}
+
 function renderAll(): void {
+  renderTypeTabs();
   tabsContainer.innerHTML = "";
   tablesContainer.innerHTML = "";
 

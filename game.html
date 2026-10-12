@@ -83,6 +83,23 @@
     #options-bar[hidden] {
       display: none;
     }
+    /* The documents of the game, on the left of the bar: the auto margin
+       pushes the buttons to the right. */
+    #documents-select {
+      font: inherit;
+      font-size: 14px;
+      color: #ffd700;
+      background: #262626;
+      border: 1px solid currentColor;
+      border-radius: 4px;
+      padding: 4px 10px;
+      margin-right: auto;
+      max-width: 50%;
+      cursor: pointer;
+    }
+    #documents-select[hidden] {
+      display: none;
+    }
     #game-wrapper {
       flex: 1;
       min-height: 0;
@@ -122,8 +139,152 @@
       color: #ff8a80;
       min-height: 1em;
     }
+    /* Everybody attached to the game, on the right of the table: the reader
+       first, then the players and the watchers. */
+    #participants {
+      flex: none;
+      width: 170px;
+      margin-left: 12px;
+      padding: 8px 10px;
+      box-sizing: border-box;
+      overflow-y: auto;
+      background: #262626;
+      border: 2px solid #444;
+      border-radius: 4px;
+      font-size: 14px;
+    }
+    #participants[hidden] {
+      display: none;
+    }
+    #participants ul {
+      list-style: none;
+      margin: 0;
+      padding: 0;
+    }
+    #participants li {
+      padding: 3px 0;
+      overflow: hidden;
+      text-overflow: ellipsis;
+      white-space: nowrap;
+    }
+    #participants li.self {
+      font-weight: bold;
+    }
+    /* how many tokens that player keeps in its private hand */
+    #participants .hand-count {
+      margin-left: 6px;
+      padding: 0 6px;
+      border: 1px solid currentColor;
+      border-radius: 9px;
+      font-size: 12px;
+      font-weight: normal;
+    }
+    /* The backs of the tokens another player keeps in hand, shown while the
+       pointer is on its name. Placed by the page, on the left of the list. */
+    #hand-preview {
+      position: fixed;
+      z-index: 10;
+      max-width: 420px;
+      padding: 8px 10px;
+      box-sizing: border-box;
+      background: #1f1f1f;
+      border: 1px solid #666;
+      border-radius: 4px;
+      box-shadow: 0 4px 14px rgba(0, 0, 0, 0.6);
+      color: #ccc;
+      font-size: 13px;
+      pointer-events: none;
+    }
+    /* the item of the private hand under the pointer, at the real size of
+       its picture, just above the pointer */
+    #hand-zoom {
+      position: fixed;
+      z-index: 30;
+      pointer-events: none;
+      border-radius: 8px;
+      box-shadow: 0 4px 18px rgba(0, 0, 0, 0.6);
+    }
+
+    #hand-zoom[hidden] {
+      display: none;
+    }
+
+    #hand-preview[hidden] {
+      display: none;
+    }
+    #hand-preview .hand-items {
+      display: flex;
+      flex-wrap: wrap;
+      gap: 6px;
+      margin-top: 6px;
+    }
+    /* The private hand of the reader, across the bottom of the page. */
+    #private-hand {
+      flex: none;
+      display: flex;
+      align-items: center;
+      gap: 10px;
+      height: 104px;
+      padding: 6px 20px;
+      box-sizing: border-box;
+      background: #262626;
+      border-top: 1px solid #3a3a3a;
+      color: #ccc;
+      font-size: 14px;
+    }
+    #private-hand[hidden] {
+      display: none;
+    }
+    /* a token held by the mouse is over the hand: releasing it keeps it there */
+    #private-hand.drop-target {
+      background: #33402f;
+      border-top-color: #6fcf6f;
+    }
+    #private-hand .hand-label {
+      flex: none;
+    }
+    #private-hand .hand-items,
+    #private-hand-items {
+      flex: 1;
+      min-width: 0;
+      height: 100%;
+      display: flex;
+      align-items: center;
+      gap: 6px;
+      overflow-x: auto;
+    }
+    .hand-item {
+      flex: none;
+      height: 80px;
+      border-radius: 3px;
+      user-select: none;
+    }
+    #private-hand .hand-item {
+      cursor: grab;
+    }
+    /* a token whose back the others may not see: a plain card of its shape */
+    div.hand-item {
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      background: #444;
+      border: 1px solid #777;
+      box-sizing: border-box;
+      color: #aaa;
+      font-size: 20px;
+    }
+    #participants li.player {
+      color: #6fcf6f;
+    }
+    #participants li.player.absent {
+      color: #ff8a80;
+    }
+    #participants li.watcher {
+      color: #6fb3ff;
+    }
     #gameCanvas {
-      width: 100%;
+      flex: 1;
+      min-width: 0;
       height: 100%;
       display: block;
       border: 2px solid #444;
@@ -148,12 +309,20 @@
   <!-- each button shows unless the game turns it off in its options; the
        first one is for the players only -->
   <div id="options-bar" hidden>
+    <!-- filled from the "documents" of the game; hidden when it has none -->
+    <select id="documents-select" aria-label="Consulter un document" hidden>
+      <option value="">Consulter</option>
+    </select>
     <button type="button" class="back" id="fix-link" title="Restaure le cadre vert à la position actuelle des pions" hidden>Fixe la position</button>
     <button type="button" class="back" id="screenshot-link" hidden>Copie d'écran</button>
   </div>
 
   <div id="game-wrapper">
     <canvas id="gameCanvas"></canvas>
+    <!-- filled from the participants the server sends at each arrival or departure -->
+    <aside id="participants" aria-label="Joueurs et spectateurs" hidden>
+      <ul id="participants-list"></ul>
+    </aside>
     <!-- shown until every image is loaded and the initial setup is applied -->
     <div id="loading-overlay" role="status" aria-live="polite">
       <span id="loading-text">Chargement en cours…</span>
@@ -161,6 +330,16 @@
       <span id="loading-warning"></span>
     </div>
   </div>
+
+  <!-- players only: what the reader keeps off the table. A token released
+       here joins it, and one dragged from here to the table is played. -->
+  <div id="private-hand" hidden>
+    <span class="hand-label">Ma main</span>
+    <div id="private-hand-items"></div>
+  </div>
+
+  <div id="hand-preview" hidden></div>
+  <img id="hand-zoom" alt="" hidden>
 
   <script type="module" src="/src/game.ts"></script>
 </body>

@@ -1,5 +1,17 @@
 import { bagUnder, createBag, drawBag, hitBag } from "./engine/bag";
 import type { Bag } from "./engine/bag";
+import {
+  createDeck,
+  deckButtonAt,
+  deckButtons,
+  drawDeckButton,
+  drawDeckText,
+  drawPile,
+  pileAt,
+  pileUnder,
+  updateDeck,
+} from "./engine/deck";
+import type { Deck, DeckButton, DeckPile } from "./engine/deck";
 import { Button } from "./engine/button";
 import { allBoardsLoaded, boardDims, createBoard, createBoardGroup, flipArea, flippedGroup } from "./engine/board";
 import type { Board, BoardGroup } from "./engine/board";
@@ -29,8 +41,11 @@ import type {
   ComponentState,
   CounterItem,
   CounterValueEvent,
+  DeckEvent,
+  DeckItem,
   DiceItem,
   DicePoolItem,
+  DrawEvent,
   FixPositionsEvent,
   FlipEvent,
   MoveEvent,
@@ -43,9 +58,13 @@ import type {
   Session,
   SessionComponents,
   SessionCreatedEvent,
+  SessionDocument,
+  SessionHands,
+  SessionParticipant,
   SessionStatusEvent,
   SetupEntry,
   SetupEvent,
+  TakeEvent,
   TokenItem,
 } from "./types";
 import { getSocket } from "./ws/wsClient";
@@ -153,6 +172,259 @@ let isClosed = false;
 let isStarted = false;
 let missingPlayers: string[] = [];
 
+// The names of the game, in a panel on the right of the table. The reader
+// always comes first; a player at the table, a player away from it and a
+// watcher each have their own colour (game.html).
+const participantsPanel = document.getElementById("participants");
+const participantsList = document.getElementById("participants-list");
+
+let participants: SessionParticipant[] = [];
+
+function updateParticipants(received: SessionParticipant[] | undefined): void {
+  // an older Tourtoirac does not send the list: what is shown stays as it is
+  if (!Array.isArray(received)) return;
+  participants = received;
+  renderParticipants();
+}
+
+function renderParticipants(): void {
+  if (!participantsPanel || !participantsList) return;
+  const me = loadPlayerIdentity()?.name;
+  const ordered = [
+    ...participants.filter((entry) => entry.nickname === me),
+    ...participants.filter((entry) => entry.nickname !== me),
+  ];
+  participantsList.replaceChildren(
+    ...ordered.map((entry) => {
+      const line = document.createElement("li");
+      line.textContent = entry.nickname;
+      line.title = entry.nickname;
+      line.classList.add(entry.role === "watcher" ? "watcher" : "player");
+      if (!entry.connected) line.classList.add("absent");
+      if (entry.nickname === me) line.classList.add("self");
+      // how many tokens this player keeps in its private hand
+      const held = entry.role === "player" ? (handsByNickname[entry.nickname]?.length ?? 0) : 0;
+      if (held > 0) {
+        const count = document.createElement("span");
+        count.className = "hand-count";
+        count.textContent = String(held);
+        line.append(count);
+        line.title = `${entry.nickname} : ${held} en main`;
+      }
+      // the pointer on the name of another player shows the backs of its hand
+      if (entry.nickname !== me && entry.role === "player") {
+        line.addEventListener("mouseenter", () => showHandPreview(entry.nickname, line));
+        line.addEventListener("mouseleave", hideHandPreview);
+      }
+      return line;
+    }),
+  );
+  // the panel takes its width from the table: the ResizeObserver of the
+  // canvas follows
+  participantsPanel.hidden = ordered.length === 0;
+  // the list was rebuilt under the pointer: the window follows the new hand
+  if (previewedNickname !== null) fillHandPreview(previewedNickname);
+}
+
+if (participantsPanel) participantsPanel.addEventListener("mouseleave", hideHandPreview);
+
+// -------------------------------------------------
+// Private hands
+// -------------------------------------------------
+
+// What a player keeps off the table. The reader sees its own hand in a strip
+// across the bottom of the page, with the faces; of the others it only knows
+// how many tokens they hold, and their backs (handsByNickname).
+// options.private_hand of the game: only true turns the private hands on.
+// Without it the strip is hidden, nothing is released to a hand and the
+// names of the other players show no preview.
+let privateHandEnabled = false;
+const privateHand = document.getElementById("private-hand");
+const privateHandItems = document.getElementById("private-hand-items");
+const handPreview = document.getElementById("hand-preview");
+
+let myHand: Counter[] = [];
+let handsByNickname: SessionHands = {};
+// whose hand the preview window shows, null when it is closed
+let previewedNickname: string | null = null;
+// The token of the strip the left button went down on. It is only asked for
+// once the pointer reaches the table: a simple click plays nothing.
+let armedHandItem: Counter | null = null;
+
+function setHands(hands: SessionHands | undefined): void {
+  // an older Tourtoirac knows no private hand
+  if (!hands || typeof hands !== "object") return;
+  handsByNickname = hands;
+  renderParticipants();
+}
+
+function fillHandPreview(nickname: string): void {
+  if (!handPreview) return;
+  const backs = handsByNickname[nickname] ?? [];
+  if (backs.length === 0) {
+    hideHandPreview();
+    return;
+  }
+  const title = document.createElement("div");
+  title.textContent = `Main de ${nickname} : ${backs.length}`;
+  const items = document.createElement("div");
+  items.className = "hand-items";
+  for (const back of backs) {
+    // the strip and the window show every token at the same height
+    const ratio = back.height > 0 ? back.width / back.height : 1;
+    let item: HTMLElement;
+    if (back.src) {
+      const image = document.createElement("img");
+      image.src = back.src;
+      image.alt = "";
+      item = image;
+    } else {
+      // no back to show: a plain card of the shape of the token
+      item = document.createElement("div");
+      item.textContent = "?";
+    }
+    item.className = "hand-item";
+    item.style.width = `${Math.round(80 * ratio)}px`;
+    items.append(item);
+  }
+  handPreview.replaceChildren(title, items);
+  handPreview.hidden = false;
+}
+
+function showHandPreview(nickname: string, line: HTMLElement): void {
+  // a game without private hands has nothing to show
+  if (!handPreview || !privateHandEnabled) return;
+  previewedNickname = nickname;
+  fillHandPreview(nickname);
+  if (handPreview.hidden) return;
+  // on the left of the list, at the height of the name, kept inside the page
+  const anchor = line.getBoundingClientRect();
+  const panel = participantsPanel?.getBoundingClientRect() ?? anchor;
+  const box = handPreview.getBoundingClientRect();
+  const top = Math.max(8, Math.min(anchor.top, window.innerHeight - box.height - 8));
+  handPreview.style.top = `${top}px`;
+  handPreview.style.left = `${Math.max(8, panel.left - box.width - 8)}px`;
+}
+
+function hideHandPreview(): void {
+  previewedNickname = null;
+  if (handPreview) handPreview.hidden = true;
+}
+
+// Gap, in pixels, between the pointer and the enlarged picture of an item of
+// the private hand, and between that picture and the edges of the page.
+const HAND_ZOOM_GAP = 12;
+const handZoom = document.getElementById("hand-zoom") as HTMLImageElement | null;
+
+// The picture is shown 1:1, one pixel of the file for one pixel of the page,
+// and only shrunk when the page is too small to hold it above the pointer.
+function showHandZoom(source: HTMLImageElement, event: MouseEvent): void {
+  if (!handZoom || source.naturalWidth === 0) return;
+  handZoom.src = source.src;
+  handZoom.dataset.naturalWidth = String(source.naturalWidth);
+  handZoom.dataset.naturalHeight = String(source.naturalHeight);
+  handZoom.hidden = false;
+  placeHandZoom(event);
+}
+
+function placeHandZoom(event: MouseEvent): void {
+  if (!handZoom || handZoom.hidden) return;
+  const naturalWidth = Number(handZoom.dataset.naturalWidth);
+  const naturalHeight = Number(handZoom.dataset.naturalHeight);
+  if (!(naturalWidth > 0) || !(naturalHeight > 0)) return;
+  // the room above the pointer and across the page
+  const roomHeight = Math.max(1, event.clientY - 2 * HAND_ZOOM_GAP);
+  const roomWidth = Math.max(1, window.innerWidth - 2 * HAND_ZOOM_GAP);
+  const scale = Math.min(1, roomHeight / naturalHeight, roomWidth / naturalWidth);
+  const width = naturalWidth * scale;
+  const height = naturalHeight * scale;
+  const left = Math.min(
+    Math.max(HAND_ZOOM_GAP, event.clientX - width / 2),
+    window.innerWidth - width - HAND_ZOOM_GAP,
+  );
+  handZoom.style.width = `${width}px`;
+  handZoom.style.height = `${height}px`;
+  handZoom.style.left = `${left}px`;
+  handZoom.style.top = `${event.clientY - HAND_ZOOM_GAP - height}px`;
+}
+
+function hideHandZoom(): void {
+  if (handZoom) handZoom.hidden = true;
+}
+
+// The strip only exists for a player: a watcher keeps nothing.
+function renderPrivateHand(): void {
+  if (!privateHand || !privateHandItems) return;
+  // nor does a game that does not turn the private hands on
+  privateHand.hidden = isWatcher || !privateHandEnabled;
+  // the item under the pointer may be leaving the strip
+  hideHandZoom();
+  privateHandItems.replaceChildren(
+    ...myHand.map((counter) => {
+      const image = document.createElement("img");
+      // the holder reads the front of what it keeps
+      image.src = counter.frontImage.src;
+      image.alt = "";
+      image.className = "hand-item";
+      image.draggable = false;
+      if (showComponentId) image.title = counter.name;
+      // the pointer on an item shows its picture at its real size
+      image.addEventListener("mouseenter", (event) => showHandZoom(image, event));
+      image.addEventListener("mousemove", (event) => placeHandZoom(event));
+      image.addEventListener("mouseleave", hideHandZoom);
+      image.addEventListener("mousedown", (event) => {
+        if (event.button !== MOUSE_LEFT) return;
+        // the item is about to be played: the enlarged picture would hide the table
+        hideHandZoom();
+        // no text selection nor native image drag while the token is carried
+        event.preventDefault();
+        armedHandItem = counter;
+      });
+      return image;
+    }),
+  );
+}
+
+function overPrivateHand(clientX: number, clientY: number): boolean {
+  if (!privateHand || privateHand.hidden) return false;
+  const box = privateHand.getBoundingClientRect();
+  return clientX >= box.left && clientX <= box.right && clientY >= box.top && clientY <= box.bottom;
+}
+
+// A token left the table for a private hand: it is no longer drawn nor
+// clickable. When the hand is the reader's, it joins the strip.
+function putInPrivateHand(counter: Counter, nickname: string): void {
+  putInBag(counter, undefined);
+  if (nickname === loadPlayerIdentity()?.name && !myHand.includes(counter)) {
+    myHand.push(counter);
+    renderPrivateHand();
+  }
+}
+
+// The pointer came from the strip onto the table with the button down: the
+// token is asked for, and arrives under the pointer like one picked from a bag.
+function requestTake(counter: Counter, x: number, y: number): void {
+  if (!isStarted) {
+    warnGameNotStarted();
+    return;
+  }
+  if (missingPlayers.length > 0) {
+    warnPlayersMissing();
+    return;
+  }
+  const socket = getSocket();
+  if (!socket) return;
+
+  dragging = true;
+  releaseOnArrival = false;
+  grabbedName = null;
+  const requestId = `${Date.now()}-${Math.random().toString(36).slice(2)}`;
+  const message = { action: "take", component_id: counter.name, x, y, request_id: requestId };
+  setPending("take", counter.name, requestId);
+  socket.send(message);
+  console.log("[WS] Envoyé :", JSON.stringify(message));
+}
+
 // Tells the player why clicking a component does nothing before the game has
 // started, instead of silently ignoring the click.
 function warnGameNotStarted(): void {
@@ -232,6 +504,12 @@ let dicePools: DicePool[] = [];
 let bags: Bag[] = [];
 const bagsById = new Map<string, Bag>();
 
+// decks are "fixed" components too: a released card goes on top of one of
+// their piles, a click takes the top card out. The cards they hold stay on
+// the server.
+let decks: Deck[] = [];
+const decksById = new Map<string, Deck>();
+
 // la situation a-t-elle déjà été lue depuis le serveur
 let componentsLoaded = false;
 
@@ -275,7 +553,7 @@ function loadComponents(components: SessionComponents | undefined): void {
 
   countersById.clear();
   counters = (components?.movable ?? [])
-    .filter((item) => item.kind === "token")
+    .filter((item) => item.kind === "token" || item.kind === "card")
     .map((item) => createCounter(item as TokenItem));
 
   for (const counter of counters) {
@@ -299,6 +577,14 @@ function loadComponents(components: SessionComponents | undefined): void {
     for (const counter of bag.content) {
       countersById.set(counter.name, counter);
     }
+  }
+
+  decksById.clear();
+  decks = (components?.fixed ?? [])
+    .filter((item) => item.kind === "deck")
+    .map((item) => createDeck(item as DeckItem));
+  for (const deck of decks) {
+    decksById.set(deck.name, deck);
   }
 
   dicesById.clear();
@@ -376,6 +662,7 @@ function createCounter(token: TokenItem): Counter {
   // commence sur sa case de départ
   if (typeof token.in_place === "boolean") counter.inPlace = token.in_place;
   counter.nationality = token.nationality ?? null;
+  counter.isCard = token.kind === "card";
   return counter;
 }
 
@@ -803,14 +1090,40 @@ const optionsBar = document.getElementById("options-bar");
 const fixLink = document.getElementById("fix-link");
 const screenshotLink = document.getElementById("screenshot-link") as HTMLButtonElement | null;
 
+const documentsSelect = document.getElementById("documents-select") as HTMLSelectElement | null;
+
 let fixPositionsEnabled = true;
 let screenCaptureEnabled = true;
+let hasDocuments = false;
+
+// The documents of the game (PDF files) are listed in a select on the left of
+// the bar, under a first "Consulter" entry that only serves as a label.
+function setupDocuments(documents: SessionDocument[]): void {
+  hasDocuments = documents.length > 0;
+  if (!documentsSelect) return;
+  // keep the "Consulter" entry, rebuild the others
+  documentsSelect.length = 1;
+  for (const entry of documents) {
+    documentsSelect.add(new Option(entry.name, entry.src));
+  }
+  documentsSelect.selectedIndex = 0;
+}
+
+if (documentsSelect) {
+  documentsSelect.addEventListener("change", () => {
+    const src = documentsSelect.value;
+    // back to "Consulter": the same document can then be opened again
+    documentsSelect.selectedIndex = 0;
+    if (src) window.open(src, "_blank", "noopener");
+  });
+}
 
 function setupOptionsBar(session: Session | null): void {
   const fix = session?.options?.fix_positions;
   fixPositionsEnabled = fix !== null && fix !== false;
   const capture = session?.options?.screen_capture;
   screenCaptureEnabled = capture !== null && capture !== false;
+  setupDocuments(session?.documents ?? []);
   updateOptionsBar();
 }
 
@@ -821,7 +1134,8 @@ function updateOptionsBar(): void {
   if (fixLink) fixLink.hidden = !showFix;
   if (screenshotLink) screenshotLink.hidden = !screenCaptureEnabled;
   updateScreenshotAvailability();
-  if (optionsBar) optionsBar.hidden = !showFix && !screenCaptureEnabled;
+  if (documentsSelect) documentsSelect.hidden = !hasDocuments;
+  if (optionsBar) optionsBar.hidden = !showFix && !screenCaptureEnabled && !hasDocuments;
 }
 
 // A capture shows the table, not a move in progress: the button is off while
@@ -968,8 +1282,9 @@ function stepEdgeScroll(dt: number): void {
 
 let hand: Counter[] = [];
 let handAnchor: Counter | null = null;
-type PendingAction = "acquire" | "release" | "pick";
-// requestId: only set for a pick, whose answer names the token, not the bag
+type PendingAction = "acquire" | "release" | "pick" | "take" | "draw";
+// requestId: set for a pick, whose answer names the token, not the bag, and
+// for a take
 let pending: { action: PendingAction; componentId: string; requestId?: string } | null = null;
 let pendingTimer: ReturnType<typeof setTimeout> | null = null;
 
@@ -1132,7 +1447,19 @@ function applyHandEvent(answer: HandEvent, isOwnRequest: boolean, fromStack = fa
   // Le rectangle vert voyage dans le même message.
   if (answer.event === "release") {
     const release = answer as ReleaseEvent;
-    if (release.bag_id) {
+    setHands(release.hands);
+    if (release.hand_of) {
+      // the holder of the hand receives the front of a card that was lying
+      // on its back; the others receive nothing new
+      const kept = release.component_json as Partial<TokenItem> | undefined;
+      if (kept) counter.setFaces(kept.front_src, kept.back_src);
+      // the token went to the private hand of a player: it leaves the table
+      putInPrivateHand(counter, release.hand_of);
+    } else if (release.deck_id) {
+      // the card went on top of a pile of a deck: it leaves the table
+      putInBag(counter, undefined);
+      refreshDeck(release.deck_json);
+    } else if (release.bag_id) {
       // the token fell into a bag: it leaves the table
       putInBag(counter, bagsById.get(release.bag_id));
     } else {
@@ -1242,14 +1569,87 @@ function requestPick(bag: Bag, x: number, y: number): void {
   console.log("[WS] Envoyé :", JSON.stringify(message));
 }
 
-// A token came out of a bag, applied by every screen: it is back on the table,
-// above the others, in the hand of the player who picked it.
-function applyPick(message: PickEvent): void {
+// The server described a deck again: a card joined or left one of its piles,
+// or a pile was shuffled.
+function refreshDeck(item: DeckItem | null | undefined): void {
+  if (!item) return;
+  const deck = decksById.get(item.id);
+  if (deck !== undefined) updateDeck(deck, item);
+}
+
+// The client only says which pile it clicked and where: the server takes the
+// top card and puts it in the hand of the player.
+function requestDraw(deck: Deck, pile: DeckPile, x: number, y: number): void {
+  // an empty pile has nothing to give: the server would refuse anyway
+  if (pile.count === 0) return;
+  if (!isStarted) {
+    warnGameNotStarted();
+    return;
+  }
+  if (missingPlayers.length > 0) {
+    warnPlayersMissing();
+    return;
+  }
+  const socket = getSocket();
+  if (!socket) return;
+
+  // two players may draw from the same pile at once: the id tells this
+  // request's answer from the other player's
+  const requestId = `${Date.now()}-${Math.random().toString(36).slice(2)}`;
+  const message = {
+    action: "draw",
+    component_id: deck.name,
+    pile: pile.name,
+    x,
+    y,
+    request_id: requestId,
+  };
+  setPending("draw", deck.name, requestId);
+  socket.send(message);
+  console.log("[WS] Envoyé :", JSON.stringify(message));
+}
+
+// A click on a button of a deck: shuffle a pile, or put the discard pile back
+// into the draw pile. The server answers the whole session with the deck.
+function requestDeckAction(button: DeckButton): void {
+  if (!isStarted) {
+    warnGameNotStarted();
+    return;
+  }
+  if (missingPlayers.length > 0) {
+    warnPlayersMissing();
+    return;
+  }
+  const socket = getSocket();
+  if (!socket) return;
+  const message = { action: button.action, component_id: button.deck.name, pile: button.pile.name };
+  socket.send(message);
+  console.log("[WS] Envoyé :", JSON.stringify(message));
+}
+
+// A pile was shuffled or the discard pile went back to the draw: every screen
+// reads the deck again and says who did it.
+function applyDeckEvent(message: DeckEvent): void {
+  refreshDeck(message.deck_json);
+  const who = message.nickname ?? "Un joueur";
+  const what =
+    message.event === "refill"
+      ? "a remis la défausse dans la pioche"
+      : `a mélangé ${message.pile === "discard" ? "la défausse" : "la pioche"}`;
+  counterInfoText = `${who} ${what}`;
+}
+
+// A token came out of a bag, of a deck or of the private hand of a player,
+// applied by every screen: it is back on the table, above the others, in the
+// mouse hand of the player who picked it.
+function applyPick(message: PickEvent | TakeEvent | DrawEvent): void {
   const isOwnRequest =
-    pending?.action === "pick" &&
+    pending?.action === message.event &&
     pending.requestId !== undefined &&
     pending.requestId === message.request_id;
   if (isOwnRequest) clearPending();
+  if (message.event === "take") setHands(message.hands);
+  if (message.event === "draw") refreshDeck(message.deck_json);
 
   const state = message.component_json;
   if (!state) return;
@@ -1263,6 +1663,10 @@ function applyPick(message: PickEvent): void {
   const picked = counter;
   for (const bag of bags) {
     bag.content = bag.content.filter((candidate) => candidate !== picked);
+  }
+  if (myHand.includes(picked)) {
+    myHand = myHand.filter((candidate) => candidate !== picked);
+    renderPrivateHand();
   }
 
   counter.x = state.x ?? 0;
@@ -1467,7 +1871,9 @@ function requestAcquire(counter: Counter): boolean {
   return true;
 }
 
-function requestRelease(counter: Counter): void {
+// toHand: the token is released over the private hand of the player, and the
+// server keeps it there instead of putting it down.
+function requestRelease(counter: Counter, toHand = false): void {
   const socket = getSocket();
   if (!socket) return;
 
@@ -1478,14 +1884,16 @@ function requestRelease(counter: Counter): void {
     component_id: counter.name,
     x: counter.x,
     y: counter.y,
+    ...(toHand ? { hand: true } : {}),
   };
   setPending("release", counter.name);
   socket.send(message);
   console.log("[WS] Envoyé :", JSON.stringify(message));
 }
 
-// The left button came up: whatever is in hand is put down where it is.
-function dropHand(): void {
+// The left button came up: whatever is in hand is put down where it is, or
+// kept in the private hand when the button came up over it (toHand).
+function dropHand(toHand = false): void {
   cancelLongPress();
   if (!dragging) return;
   dragging = false;
@@ -1497,11 +1905,17 @@ function dropHand(): void {
     if (pending?.action === "acquire") stackRequests.add(pending.componentId);
     // bottom first: each release brings its token above the others, so the
     // stack keeps its order
-    for (const counter of [...hand]) requestRelease(counter);
+    for (const counter of [...hand]) requestRelease(counter, toHand);
     return;
   }
-  // the answer to the acquire or to the pick is still on its way
-  if (pending?.action === "acquire" || pending?.action === "pick") {
+  // the answer to the acquire, to the pick, to the take or to the draw is
+  // still on its way
+  if (
+    pending?.action === "acquire" ||
+    pending?.action === "pick" ||
+    pending?.action === "take" ||
+    pending?.action === "draw"
+  ) {
     releaseOnArrival = true;
   }
 }
@@ -1594,6 +2008,16 @@ function onMouseDown(event: MouseEvent): void {
       }
     }
 
+    // click on a button of a deck: shuffle, or refill. Like the + and - of a
+    // counter, the buttons come before a token lying over them.
+    if (hand.length === 0) {
+      const deckButton = deckButtonAt(decks, lx, ly);
+      if (deckButton !== null) {
+        requestDeckAction(deckButton);
+        return;
+      }
+    }
+
     // A token is still in hand without the button being down (session
     // resumed, answer that came late): the press takes the hand over, and the
     // button coming up puts it down like any other.
@@ -1640,6 +2064,18 @@ function onMouseDown(event: MouseEvent): void {
       requestPick(clickedBag, lx, ly);
       return;
     }
+
+    // click on a pile of a deck: its top card comes out. A card lying on the
+    // pile is drawn above it and was taken first.
+    const clickedPile = pileAt(decks, lx, ly);
+    if (clickedPile !== null) {
+      // the card drawn comes out under the pointer, already being dragged
+      dragging = true;
+      releaseOnArrival = false;
+      grabbedName = null;
+      requestDraw(clickedPile.deck, clickedPile.pile, lx, ly);
+      return;
+    }
   }
 }
 
@@ -1683,6 +2119,16 @@ function onMouseMove(event: MouseEvent): void {
     return;
   }
 
+  // the pointer comes from the private hand with the button down: the token
+  // it went down on is played here
+  if (armedHandItem !== null) {
+    const played = armedHandItem;
+    armedHandItem = null;
+    if ((event.buttons & MOUSE_LEFT_MASK) !== 0 && pending === null && hand.length === 0) {
+      requestTake(played, lx, ly);
+    }
+  }
+
   // the pointer left the press point: this is a drag, not a long press
   if (
     longPressTimer !== null &&
@@ -1719,7 +2165,19 @@ function onMouseMove(event: MouseEvent): void {
 function onMouseUp(event: MouseEvent): void {
   // only releasing the right button ends the camera move
   if (event.button === MOUSE_RIGHT) panning = false;
-  if (event.button === MOUSE_LEFT) dropHand();
+  if (event.button === MOUSE_LEFT) {
+    armedHandItem = null;
+    dropHand(overPrivateHand(event.clientX, event.clientY));
+    privateHand?.classList.remove("drop-target");
+  }
+}
+
+// Listened on the window: the canvas hears nothing once the pointer is over
+// the private hand. The strip lights up while a release would keep the token.
+function onWindowMouseMove(event: MouseEvent): void {
+  if (!privateHand) return;
+  const target = dragging && hand.length > 0 && overPrivateHand(event.clientX, event.clientY);
+  privateHand.classList.toggle("drop-target", target);
 }
 
 // -------------------------------------------------
@@ -2005,6 +2463,11 @@ function draw(): void {
     });
   }
 
+  // decks lie on the board like bags. A pile a held card hovers over is
+  // outlined; only a player has buttons to click.
+  const targetedPiles = hand.map((counter) => pileUnder(decks, counter));
+  drawDecks(ctx, targetedPiles, !isWatcher);
+
   // les fantômes de case d'origine passent sous les pions, pour que le pion
   // réel posé dessus reste lisible
   for (const counter of counters) {
@@ -2147,6 +2610,12 @@ function handleServerMessage(raw: unknown): void {
       applyHandEvent(answer, isOwnRequest, fromStack);
     } else if (data.event === "pick") {
       applyPick(data as unknown as PickEvent);
+    } else if (data.event === "take") {
+      applyPick(data as unknown as TakeEvent);
+    } else if (data.event === "draw") {
+      applyPick(data as unknown as DrawEvent);
+    } else if (data.event === "shuffle" || data.event === "refill") {
+      applyDeckEvent(data as unknown as DeckEvent);
     } else if (data.event === "move") {
       applyRemoteMove(data as unknown as MoveEvent);
     } else if (data.event === "roll") {
@@ -2208,7 +2677,17 @@ const ACQUIRE_ERRORS = ["session_not_started", "players_missing"];
 // refusal of a pick, of an acquire aimed at a bag or at a token of another
 // nationality: nothing to tell the player, but the pending request will get
 // no other answer
-const BAG_ERRORS = ["bag_empty", "component_not_a_bag", "component_in_bag", "wrong_nationality"];
+// the same goes for a draw and for a card inside a deck
+const BAG_ERRORS = [
+  "bag_empty",
+  "component_not_a_bag",
+  "component_in_bag",
+  "wrong_nationality",
+  "pile_empty",
+  "unknown_pile",
+  "component_not_a_deck",
+  "component_in_deck",
+];
 
 // refus du démarrage : le bouton redevient cliquable
 const START_ERRORS = [
@@ -2498,6 +2977,7 @@ function handleSessionEvent(data: GameServerMessage): void {
   }
   if (typeof session.started === "boolean") isStarted = session.started;
   if (Array.isArray(session.missing_players)) missingPlayers = session.missing_players;
+  updateParticipants(session.participants);
   updateLeaveLinks();
 
   currentSession = session;
@@ -2505,6 +2985,7 @@ function handleSessionEvent(data: GameServerMessage): void {
   updateSessionInfo();
   setupOptionsBar(session);
   showComponentId = session.options?.component_id_display !== false;
+  privateHandEnabled = session.options?.private_hand === true;
   // a name already on screen goes away with the option
   if (!showComponentId) counterInfoText = "";
 
@@ -2514,7 +2995,16 @@ function handleSessionEvent(data: GameServerMessage): void {
   if (!componentsLoaded) {
     componentsLoaded = true;
     loadComponents(session.components);
+    // the private hand of the reader is read with the table, and like it
+    // only once: the tokens it holds are known by their id, but not drawn
+    myHand = (session.hand ?? []).map((token) => {
+      const counter = createCounter(token);
+      countersById.set(counter.name, counter);
+      return counter;
+    });
   }
+  setHands(session.hands);
+  renderPrivateHand();
 
   // le setup en attente n'est lu qu'avec la situation initiale, comme elle. Le
   // serveur le vide des qu'il est applique : le relire a chaque message de
@@ -2530,6 +3020,7 @@ function handleSessionEvent(data: GameServerMessage): void {
 function applySessionStatus(message: SessionStatusEvent): void {
   isStarted = message.started;
   missingPlayers = message.missing_players ?? [];
+  updateParticipants(message.participants);
   if (isStarted) pendingStart = false;
   updateLeaveLinks();
   updateSessionInfo();
@@ -2584,6 +3075,8 @@ function updateLeaveLinks(): void {
   }
   // the role and the closing of the game also decide of the options bar
   updateOptionsBar();
+  // and of the private hand, which a watcher does not have
+  renderPrivateHand();
   if (!closeLink) return;
   closeLink.hidden = !isOwner || isClosed;
 }
@@ -2721,6 +3214,35 @@ function componentsBounds(): WorldRect | null {
 
 // The game alone, as the table shows it: no grid, no hover zone, no button, no
 // info bar. The order is the one of draw().
+// The decks at their place on screen: each pile, its buttons when asked for,
+// and the caption of the deck.
+function drawDecks(
+  context: CanvasRenderingContext2D,
+  targetedPiles: (DeckPile | null)[],
+  withButtons: boolean,
+): void {
+  for (const deck of decks) {
+    for (const pile of deck.piles) {
+      drawAtDisplay(context, pile.x, pile.y, deck.width, deck.height, () => {
+        drawPile(context, deck, pile, targetedPiles.includes(pile));
+      });
+    }
+    if (withButtons) {
+      for (const button of deckButtons(deck)) {
+        drawAtDisplay(context, button.x, button.y, button.width, button.height, () => {
+          drawDeckButton(context, button);
+        });
+      }
+    }
+    const first = deck.piles[0];
+    if (first !== undefined) {
+      drawAtDisplay(context, first.x, first.y, deck.width, deck.height, () => {
+        drawDeckText(context, deck);
+      });
+    }
+  }
+}
+
 function drawComponents(context: CanvasRenderingContext2D): void {
   for (const board of boards) {
     drawBoard(board, context);
@@ -2735,6 +3257,7 @@ function drawComponents(context: CanvasRenderingContext2D): void {
       drawBag(context, bag, false);
     });
   }
+  drawDecks(context, [], false);
   for (const counter of counters) {
     if (!counter.showsOriginGhost) continue;
     const originX = counter.originX;
@@ -2919,6 +3442,7 @@ canvas.addEventListener("wheel", onMouseWheel, { passive: false });
 
 // relâchement hors du canvas
 window.addEventListener("mouseup", onMouseUp);
+window.addEventListener("mousemove", onWindowMouseMove);
 // the right button moves the camera: no context menu over the game
 canvas.addEventListener("contextmenu", (event) => event.preventDefault());
 window.addEventListener("keydown", onKeyDown);

@@ -70,6 +70,8 @@ export class Counter {
   side: CounterSide;
   /** the side the token belongs to, among the nationalities of the game */
   nationality: string | null = null;
+  /** a card is handled like a token, and is the only thing a deck accepts */
+  isCard = false;
 
   constructor(
     name: string,

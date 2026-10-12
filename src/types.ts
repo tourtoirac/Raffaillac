@@ -55,7 +55,8 @@ export interface HexGridItem {
 }
 
 export interface TokenItem {
-  kind: "token";
+  /** a card is described like a token: it only differs by what a deck accepts */
+  kind: "token" | "card";
   id: string;
   /**
    * null when the server keeps this face back: the hidden face of a token of
@@ -195,9 +196,41 @@ export interface BagItem {
   components: TokenItem[];
 }
 
+export type DeckPileName = "draw" | "discard";
+
+/** a pile of a deck, as everybody may know it */
+export interface DeckPileItem {
+  x: number;
+  y: number;
+  /** number of cards of the pile */
+  count: number;
+  /** what the top card shows on this pile; null on an empty pile */
+  top: HandBack | null;
+}
+
+/**
+ * A deck: a fixed component holding cards, and only cards. "single" is one
+ * pile, "duo" a draw pile and a discard pile. The cards stay on the server:
+ * they come one by one, when they are drawn.
+ */
+export interface DeckItem {
+  kind: "deck";
+  id: string;
+  type: "single" | "duo";
+  x: number;
+  y: number;
+  /** size of one pile, that is of one card */
+  width: number;
+  height: number;
+  /** caption written above the deck; absent, null or empty, nothing is written */
+  text?: string | null;
+  /** a single deck only has the draw pile */
+  piles: Partial<Record<DeckPileName, DeckPileItem>>;
+}
+
 export interface SessionComponents {
-  // a board, a counter, a dice pool, a bag: whatever does not move with the tokens
-  fixed: (BoardItem | BoardGroupItem | CounterItem | DicePoolItem | BagItem)[];
+  // a board, a counter, a dice pool, a bag, a deck: whatever does not move with the tokens
+  fixed: (BoardItem | BoardGroupItem | CounterItem | DicePoolItem | BagItem | DeckItem)[];
   movable: TokenItem[];
   // absent d'un Tourtoirac plus ancien : le dé est donc facultatif
   dice?: DiceItem[];
@@ -227,6 +260,11 @@ export interface SessionOptions {
   /** set by the server once the ids have been replaced */
   anonymized?: boolean;
   /**
+   * true: each player keeps tokens and cards in a private hand. Absent or
+   * false, the game has no private hand
+   */
+  private_hand?: boolean;
+  /**
    * false: the info bar does not show the name and the position of the
    * tokens. Absent or true, it does.
    */
@@ -254,10 +292,36 @@ export interface Session {
   started?: boolean;
   /** joueurs qui ont un siège mais ne sont pas à la table */
   missing_players?: string[];
+  /** everybody attached to the game: the seats first, then the watchers */
+  participants?: SessionParticipant[];
   /** the sides the game declares; empty or absent when it has none */
   nationalities?: string[];
   /** the nationality of each seat, by nickname */
   player_nationalities?: Record<string, string>;
+  /** the PDF files the game lets the players consult; empty or absent when it has none */
+  documents?: SessionDocument[];
+  /** what everybody sees of the private hands, by nickname */
+  hands?: SessionHands;
+  /** the private hand of the reader, with its faces; empty for a watcher */
+  hand?: TokenItem[];
+}
+
+/**
+ * a token kept in the private hand of a player, as the others see it: its
+ * back and its size. src is null when the token has no back to show.
+ */
+export interface HandBack {
+  src: string | null;
+  width: number;
+  height: number;
+}
+
+export type SessionHands = Record<string, HandBack[]>;
+
+/** a document of the game ("documents" of its game_json): always a PDF */
+export interface SessionDocument {
+  src: string;
+  name: string;
 }
 
 /**
@@ -274,6 +338,14 @@ export interface SetupEntry {
    * dos, un plateau ou un de gardent la face qu'ils montrent.
    */
   side?: "front" | "back";
+}
+
+/** a line of the list of names shown on the right of the game page */
+export interface SessionParticipant {
+  nickname: string;
+  role: "player" | "watcher";
+  /** false: a player who has a seat but is not at the table */
+  connected: boolean;
 }
 
 export interface SessionPlayer {
@@ -294,8 +366,13 @@ export interface GameVariantInfo {
   nationalities?: string[];
 }
 
+/** the family of a game, set in Chabanas: one tab of the lobby per type */
+export type GameType = "Boardgame" | "Wargame";
+
 export interface GameInfo {
   name: string;
+  /** absent from an older Chabanas: the game is then filed as a wargame */
+  type?: GameType;
   variant?: Record<string, GameVariantInfo>;
 }
 
@@ -339,6 +416,8 @@ export interface SessionStatusEvent {
   event: "session_status";
   started: boolean;
   missing_players: string[];
+  /** absent from an older Tourtoirac */
+  participants?: SessionParticipant[];
 }
 
 // la partie a été archivée : plus rien n'y bouge, tout le monde regarde
@@ -379,6 +458,30 @@ export interface ReleaseEvent extends HandEventBase {
   component_json?: ComponentState;
   /** the bag the token fell into; null or absent when it stays on the table */
   bag_id?: string | null;
+  /** the deck whose pile the card went on; null or absent when it stays on the table */
+  deck_id?: string | null;
+  /** that deck after the release */
+  deck_json?: DeckItem | null;
+  /** nickname of the player whose private hand took the token; null or absent otherwise */
+  hand_of?: string | null;
+  /** what everybody sees of the private hands after this release */
+  hands?: SessionHands;
+}
+
+// a player played a token of its private hand, sent to the whole session: the
+// token is back on the table, in the mouse hand of that player
+export interface TakeEvent {
+  event: "take";
+  /** id of the token */
+  component_id: string;
+  user: string;
+  /** nickname of the player the token came from */
+  hand_of: string;
+  hands?: SessionHands;
+  /** the request_id of the take action, so a client recognises its own */
+  request_id?: string | null;
+  /** the token played, at the place the server put it */
+  component_json: TokenItem;
 }
 
 // a player took a token out of a bag, sent to the whole session: the token is
@@ -392,6 +495,34 @@ export interface PickEvent {
   request_id?: string | null;
   /** the token picked, at the place the server put it */
   component_json: TokenItem;
+}
+
+// a player took the top card of a pile of a deck, sent to the whole session:
+// the card is back on the table, in the hand of that player
+export interface DrawEvent {
+  event: "draw";
+  /** id of the deck */
+  component_id: string;
+  pile: DeckPileName;
+  user: string;
+  /** the request_id of the draw action, so a client recognises its own */
+  request_id?: string | null;
+  /** the card drawn, at the place the server put it; its front is kept back while it lies on its back */
+  component_json: TokenItem;
+  /** the deck without that card */
+  deck_json: DeckItem;
+}
+
+// a pile of a deck was shuffled, or its discard pile put back into the draw
+export interface DeckEvent {
+  event: "shuffle" | "refill";
+  /** id of the deck */
+  component_id: string;
+  pile?: DeckPileName;
+  user: string;
+  /** nickname of the player who did it */
+  nickname?: string;
+  deck_json: DeckItem;
 }
 
 // sous-ensemble de return_json() renvoyé par Tourtoirac pour un composant

@@ -56,6 +56,32 @@
       gap: 20px;
     }
 
+    /* One horizontal tab per type of game, above the list of games. */
+    .type-tabs {
+      display: flex;
+      gap: 4px;
+      margin-bottom: 16px;
+      border-bottom: 2px solid #007bff;
+    }
+
+    .type-tab {
+      padding: 10px 24px;
+      cursor: pointer;
+      border: 1px solid #ccc;
+      border-bottom: none;
+      background-color: #e0e0e0;
+      border-radius: 5px 5px 0 0;
+      font-size: 15px;
+      transition: background-color 0.3s;
+    }
+
+    .type-tab.active {
+      background-color: #007bff;
+      border-color: #007bff;
+      color: #fff;
+      font-weight: bold;
+    }
+
     .tabs {
       display: flex;
       flex-direction: column;
@@ -388,6 +414,8 @@
   <div id="status-container">
     <div id="status">Chargement de la configuration...</div>
   </div>
+
+  <div id="type-tabs" class="type-tabs" role="tablist"></div>
 
   <div id="layout">
     <div id="tabs-container" class="tabs"></div>

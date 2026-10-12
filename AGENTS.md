@@ -75,6 +75,8 @@ Les noms ne correspondent pas : c'est le piège principal.
 | `dice`    | `Dice`    | `Dice` (classe, `engine/dice.ts`) | `DiceItem` |
 | `dice_pool` | `DicePool` | `DicePool` (interface, `engine/dice.ts`) | `DicePoolItem` |
 | `bag`     | `Bag`     | `Bag` (interface, `engine/bag.ts`) | `BagItem` |
+| `deck`    | `Deck`    | `Deck` (interface, `engine/deck.ts`) | `DeckItem` |
+| `card`    | `Card`    | `Counter` avec `isCard` | `TokenItem` (`kind: "card"`) |
 
 Dans `game.ts`, `counters` / `countersById` / `hand` désignent donc des
 **pions**, et `counterBoxes` des compteurs numériques. Partout, l'identifiant
@@ -192,6 +194,52 @@ pions dans le bandeau d'info (`showComponentId` dans `game.ts`, lu dans
 `handleSessionEvent`). Absent ou `true`, le bandeau s'affiche comme avant. Les
 messages de refus (« Pion réservé à … ») restent affichés, sans le nom. C'est
 un réglage purement client : Tourtoirac transmet `options` tel quel.
+
+Lobby : `#type-tabs` porte un onglet horizontal par type de jeu
+(`GAME_TYPES` dans `lobby.ts` : `Boardgame`, `Wargame`). Le type vient de
+`GameInfo.type`, défini dans Chabanas ; absent, le jeu est rangé en `Wargame`.
+Les onglets de jeux (`#tabs-container`) ne listent que les jeux du type
+affiché (`visibleGameNames`). L'onglet courant est gardé dans `?type=` ; sans
+ce paramètre, c'est le type du jeu de `?game=` qui est affiché.
+
+`#participants`, à droite de la table, liste les pseudos de la partie d'après
+`participants` (`Session` et événement `session_status`, renvoyé par
+Tourtoirac à chaque arrivée ou départ) : le lecteur en premier, puis les
+sièges, puis les spectateurs. Couleurs dans `game.html` : joueur à la table en
+vert, joueur absent (`.absent`) en rouge, spectateur en bleu.
+
+Main privée, seulement si `options.private_hand` vaut `true`
+(`privateHandEnabled`) ; sinon le bandeau est caché et le survol d'un pseudo
+n'ouvre pas `#hand-preview`. `#private-hand`, bandeau en bas de page réservé aux joueurs,
+montre `myHand` (les pions que le lecteur garde hors de la table, faces
+visibles). Relâcher un pion au-dessus du bandeau envoie `release` avec
+`hand: true` (`dropHand(toHand)`) ; presser un pion du bandeau puis amener le
+pointeur sur la table envoie `take` (`armedHandItem` → `requestTake`), et sa
+réponse est traitée par `applyPick`, comme un tirage dans un sac. Un simple
+clic ne joue rien. Le survol d'un objet du bandeau affiche son image en
+taille réelle (1:1, réduite seulement si la page est trop petite) au-dessus
+du pointeur (`#hand-zoom`, `showHandZoom`). `handsByNickname` (`hands` de la session et des événements
+`release` / `take`) donne le nombre affiché à côté de chaque pseudo et les dos
+montrés dans `#hand-preview` au survol du pseudo d'un autre joueur. Attention :
+`hand` désigne ailleurs dans `game.ts` les pions tenus à la souris.
+
+Paquets de cartes : un `deck` de `fixed` va dans `decks` (`engine/deck.ts`).
+Le client **n'a pas les cartes** : il ne connaît de chaque pile que `count` et
+l'image du dessus, relus par `refreshDeck` à chaque `deck_json` reçu
+(`release` avec `deck_id`, `draw`, `shuffle`, `refill`). Un clic sur une pile
+envoie `draw` (`requestDraw`), dont la réponse passe par `applyPick` comme un
+tirage dans un sac ; les boutons « Shuffle » et « Refill », dessinés sous les
+piles en coordonnées monde et réservés aux joueurs, envoient `shuffle` /
+`refill` (`deckButtonAt` → `requestDeckAction`). Une carte est un `Counter`
+dont `isCard` est vrai : seule elle fait briller une pile (`pileUnder`). Une
+carte piochée arrive sans sa face (`front_src` nul) ; elle la reçoit par
+`flip`, ou par le `release` qui la met dans la main privée du lecteur.
+
+`Session.documents` (clé `documents` du `game_json`, des PDF) alimente le menu
+déroulant `#documents-select`, à gauche du bandeau `#options-bar` : première
+entrée « Consulter », puis le nom de chaque document ; en choisir un l'ouvre
+dans un nouvel onglet et ramène le menu sur « Consulter ». Sans document, le
+menu est masqué.
 
 « Fixe la position » et « Copie d'écran » sont dans le bandeau `#options-bar`
 de `game.html`, sous l'en-tête (`setupOptionsBar` / `updateOptionsBar` dans
