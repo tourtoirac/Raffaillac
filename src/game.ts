@@ -57,12 +57,6 @@ const RESPONSE_TIMEOUT = 2000;
 // repli si le jeu ne dit rien dans son game_json, ou si un Tourtoirac plus
 // ancien n'annonçait pas le délai dans l'événement de lancer
 const ROLL_COOLDOWN_SECONDS = 5;
-// position du bouton "Fixe la position" quand le jeu ne dit rien : un jeu peut
-// le déplacer (options.fix_positions) ou le masquer (options.fix_positions null)
-const DEFAULT_FIX_BUTTON_X = 1350;
-const DEFAULT_FIX_BUTTON_Y = 10;
-const FIX_BUTTON_WIDTH = 220;
-const FIX_BUTTON_HEIGHT = 40;
 // "flip" button of a board_group the game marks flippable: the group turns
 // over on this player's screen, without changing anything for the others. It
 // is anchored to the group but sized in screen pixels, pour rester cliquable à
@@ -545,9 +539,9 @@ function drawAtDisplay(
 // Un pion à sa place d'écran. Le pion lui-même n'est pas touché : sur un plateau
 // retourné, il change de coin sans pivoter, son angle reste celui que lui a
 // donné le serveur.
-function drawCounterAtDisplay(counter: Counter): void {
-  drawAtDisplay(ctx, counter.x, counter.y, counter.width, counter.height, () => {
-    counter.draw(ctx);
+function drawCounterAtDisplay(counter: Counter, context: CanvasRenderingContext2D = ctx): void {
+  drawAtDisplay(context, counter.x, counter.y, counter.width, counter.height, () => {
+    counter.draw(context);
   });
 }
 
@@ -799,29 +793,53 @@ function applyComponentState(state: ComponentState | undefined): void {
   if (typeof state.initial_y === "number") counter.initialY = state.initial_y;
 }
 
-// bouton de repositionnement : sa position vient du game_json du jeu, qui peut
-// aussi le masquer. Absent, le client garde sa position par défaut.
-let buttonFix: Button | null = null;
+// "Fixe la position" and "Copie d'écran" live in an optional bar under the
+// header. Both options are booleans: the game hides either button with
+// options.fix_positions or options.screen_capture set to false; true, or no
+// option at all, shows it. A game saved before fix_positions became a boolean
+// may still carry null (hidden) or a position (shown). The bar itself goes
+// away when it has no button left to show.
+const optionsBar = document.getElementById("options-bar");
+const fixLink = document.getElementById("fix-link");
+const screenshotLink = document.getElementById("screenshot-link") as HTMLButtonElement | null;
 
-function setupFixButton(session: Session | null): void {
-  const position = session?.options?.fix_positions;
-  if (position === null) {
-    buttonFix = null;
-    return;
-  }
-  const x = typeof position?.x === "number" ? position.x : DEFAULT_FIX_BUTTON_X;
-  const y = typeof position?.y === "number" ? position.y : DEFAULT_FIX_BUTTON_Y;
-  buttonFix = new Button(
-    x,
-    y,
-    FIX_BUTTON_WIDTH,
-    FIX_BUTTON_HEIGHT,
-    "Fixe la position",
-    () => {
-      // le serveur remet le rectangle vert et prévient joueurs et spectateurs
-      getSocket()?.send({ action: "fix_positions" });
-    },
-  );
+let fixPositionsEnabled = true;
+let screenCaptureEnabled = true;
+
+function setupOptionsBar(session: Session | null): void {
+  const fix = session?.options?.fix_positions;
+  fixPositionsEnabled = fix !== null && fix !== false;
+  const capture = session?.options?.screen_capture;
+  screenCaptureEnabled = capture !== null && capture !== false;
+  updateOptionsBar();
+}
+
+function updateOptionsBar(): void {
+  // moving the counters back is reserved to the players of a game still open;
+  // a watcher may still take a screenshot
+  const showFix = fixPositionsEnabled && !isWatcher && !isClosed;
+  if (fixLink) fixLink.hidden = !showFix;
+  if (screenshotLink) screenshotLink.hidden = !screenCaptureEnabled;
+  updateScreenshotAvailability();
+  if (optionsBar) optionsBar.hidden = !showFix && !screenCaptureEnabled;
+}
+
+// A capture shows the table, not a move in progress: the button is off while
+// this player holds a token, and while an image is being encoded. Called every
+// frame, so it only touches the DOM when the state changes.
+let capturing = false;
+
+function updateScreenshotAvailability(): void {
+  if (!screenshotLink) return;
+  const disabled = capturing || hand.length > 0;
+  if (screenshotLink.disabled !== disabled) screenshotLink.disabled = disabled;
+}
+
+if (fixLink) {
+  fixLink.addEventListener("click", () => {
+    // le serveur remet le rectangle vert et prévient joueurs et spectateurs
+    getSocket()?.send({ action: "fix_positions" });
+  });
 }
 
 // -------------------------------------------------
@@ -1510,15 +1528,8 @@ function onMouseDown(event: MouseEvent): void {
   event.preventDefault();
   const [wx, wy] = screenToWorld(sx, sy);
 
-  // le bouton "fixe la position" est posé dans le monde, comme les composants
-  // qu'il manipule : il se vise en coordonnées monde. Le bouton "flip", lui, est
-  // dessiné à l'écran et se vise en coordonnées d'écran. Ni l'un ni l'autre ne
-  // dépend du retournement d'un plateau.
-  if (!isWatcher && buttonFix && buttonFix.contains(wx, wy)) {
-    buttonFix.callback();
-    return;
-  }
-
+  // the "flip" and "roll" buttons are drawn on screen and aimed in screen
+  // coordinates: they do not depend on the flip of a board.
   for (const plate of flipPlates) {
     if (placeFlipButton(plate).contains(sx, sy)) {
       plate.button.callback();
@@ -1994,9 +2005,6 @@ function draw(): void {
     });
   }
 
-  // le bouton de repositionnement est réservé aux joueurs
-  if (!isWatcher && buttonFix) buttonFix.draw(ctx);
-
   // les fantômes de case d'origine passent sous les pions, pour que le pion
   // réel posé dessus reste lisible
   for (const counter of counters) {
@@ -2065,9 +2073,8 @@ function draw(): void {
   ctx.restore();
 
   // les boutons "flip" par-dessus le jeu, pour rester cliquables même quand un
-  // pion passe sous eux, mais sous le bandeau d'info, comme le bouton "fixe la
-  // position" : le nom du pion sélectionné doit rester lisible d'un bout à
-  // l'autre. A flipped group occupies the same bounding box, so its button
+  // pion passe sous eux, mais sous le bandeau d'info : le nom du pion
+  // sélectionné doit rester lisible d'un bout à l'autre. A flipped group occupies the same bounding box, so its button
   // stays at the same place on screen.
   for (const plate of flipPlates) {
     placeFlipButton(plate).draw(ctx);
@@ -2496,7 +2503,7 @@ function handleSessionEvent(data: GameServerMessage): void {
   currentSession = session;
   storeSession(session);
   updateSessionInfo();
-  setupFixButton(session);
+  setupOptionsBar(session);
   showComponentId = session.options?.component_id_display !== false;
   // a name already on screen goes away with the option
   if (!showComponentId) counterInfoText = "";
@@ -2575,6 +2582,8 @@ function updateLeaveLinks(): void {
     startLink.hidden = !isOwner || isStarted || isWatcher || isClosed;
     startLink.disabled = pendingStart;
   }
+  // the role and the closing of the game also decide of the options bar
+  updateOptionsBar();
   if (!closeLink) return;
   closeLink.hidden = !isOwner || isClosed;
 }
@@ -2647,19 +2656,144 @@ function screenshotFilename(): string {
   return `obg-${game || "partie"}-${stamp}.png`;
 }
 
-// Un canvas est une surface DrawingML : la seule façon de la photographier
-// depuis la page est de la redessiner ailleurs. On récupère ce qu'on peut — le
-// contenu réellement affiché, dans la résolution réellement affichée, donc sans
-// le bandeau ni la bordure du canvas.
-async function downloadScreenshot(): Promise<void> {
-  let blob: Blob | null = null;
-  try {
-    // toBlob est asynchrone et rend la main à la boucle de jeu : l'image
-    // capturée est l'image encodée au moment de l'appel, pas celle qui passera
-    // à l'écran une frame plus tard.
-    blob = await new Promise<Blob | null>((resolve) => {
-      canvas.toBlob(resolve, "image/png");
+// Margin around the components, in world pixels: it leaves room for the shadow
+// and the outline a token draws outside its rectangle.
+const SCREENSHOT_MARGIN = 20;
+// A browser refuses a canvas over its size limit, which differs from one
+// browser to the next: the capture then shrinks by this factor and tries
+// again, a few times.
+const SCREENSHOT_SHRINK = 0.75;
+const SCREENSHOT_ATTEMPTS = 6;
+
+interface WorldRect {
+  x: number;
+  y: number;
+  width: number;
+  height: number;
+}
+
+// The rectangle of the world that holds every component of the game, where
+// each one is drawn: boards, counters, bags, tokens out of the bags and dice.
+// Null while the game has nothing to show.
+function componentsBounds(): WorldRect | null {
+  let minX = Infinity;
+  let minY = Infinity;
+  let maxX = -Infinity;
+  let maxY = -Infinity;
+  const add = (x: number, y: number, width: number, height: number): void => {
+    const [dx, dy] = displayTopLeft(x, y, width, height);
+    minX = Math.min(minX, dx);
+    minY = Math.min(minY, dy);
+    maxX = Math.max(maxX, dx + width);
+    maxY = Math.max(maxY, dy + height);
+  };
+
+  for (const board of boards) {
+    const { width, height } = boardDims(board);
+    add(board.x, board.y, width, height);
+  }
+  for (const box of counterBoxes) add(box.x, box.y, box.width, box.height);
+  for (const bag of bags) add(bag.x, bag.y, bag.width, bag.height);
+  for (const dice of dices) add(dice.x, dice.y, dice.width, dice.height);
+  for (const counter of counters) {
+    // a turned token covers more than its upright rectangle
+    const angle = (counter.orientation * Math.PI) / 180;
+    const cos = Math.abs(Math.cos(angle));
+    const sin = Math.abs(Math.sin(angle));
+    const width = counter.width * cos + counter.height * sin;
+    const height = counter.width * sin + counter.height * cos;
+    add(
+      counter.x + (counter.width - width) / 2,
+      counter.y + (counter.height - height) / 2,
+      width,
+      height,
+    );
+  }
+
+  if (minX === Infinity) return null;
+  return {
+    x: minX - SCREENSHOT_MARGIN,
+    y: minY - SCREENSHOT_MARGIN,
+    width: maxX - minX + 2 * SCREENSHOT_MARGIN,
+    height: maxY - minY + 2 * SCREENSHOT_MARGIN,
+  };
+}
+
+// The game alone, as the table shows it: no grid, no hover zone, no button, no
+// info bar. The order is the one of draw().
+function drawComponents(context: CanvasRenderingContext2D): void {
+  for (const board of boards) {
+    drawBoard(board, context);
+  }
+  for (const box of counterBoxes) {
+    drawAtDisplay(context, box.x, box.y, box.width, box.height, () => {
+      drawCounterBox(context, box);
     });
+  }
+  for (const bag of bags) {
+    drawAtDisplay(context, bag.x, bag.y, bag.width, bag.height, () => {
+      drawBag(context, bag, false);
+    });
+  }
+  for (const counter of counters) {
+    if (!counter.showsOriginGhost) continue;
+    const originX = counter.originX;
+    const originY = counter.originY;
+    if (originX === null || originY === null) continue;
+    drawAtDisplay(context, originX, originY, counter.width, counter.height, () => {
+      counter.drawOriginGhost(context);
+    });
+  }
+  for (const counter of counters) {
+    if (counter.image.complete) drawCounterAtDisplay(counter, context);
+  }
+  for (const dice of dices) {
+    const image = dice.face();
+    if (!image?.complete) continue;
+    drawAtDisplay(context, dice.x, dice.y, dice.width, dice.height, () => {
+      context.drawImage(image, dice.x, dice.y, dice.width, dice.height);
+    });
+  }
+}
+
+// The whole game on a canvas of its own, at the given scale (1 is one image
+// pixel per world pixel). Null when the browser cannot make that canvas.
+function renderComponents(bounds: WorldRect, scale: number): HTMLCanvasElement | null {
+  const surface = document.createElement("canvas");
+  surface.width = Math.max(1, Math.round(bounds.width * scale));
+  surface.height = Math.max(1, Math.round(bounds.height * scale));
+  const context = surface.getContext("2d");
+  if (context === null) return null;
+
+  context.fillStyle = "gray";
+  context.fillRect(0, 0, surface.width, surface.height);
+  context.setTransform(scale, 0, 0, scale, -bounds.x * scale, -bounds.y * scale);
+  drawComponents(context);
+  return surface;
+}
+
+// The capture does not copy the game canvas: that one only holds what the
+// camera shows, at its zoom. The game is drawn again on a canvas as large as
+// the game itself, so the image has every component, on screen or not, at 1:1.
+async function downloadScreenshot(): Promise<void> {
+  const bounds = componentsBounds();
+  if (bounds === null) return;
+
+  let blob: Blob | null = null;
+  let scale = 1;
+  try {
+    for (let attempt = 0; attempt < SCREENSHOT_ATTEMPTS && blob === null; attempt++) {
+      // drawn before toBlob hands over to the game loop: the image is the
+      // table at the time of the click
+      const surface = renderComponents(bounds, scale);
+      if (surface !== null) {
+        blob = await new Promise<Blob | null>((resolve) => {
+          surface.toBlob(resolve, "image/png");
+        });
+      }
+      // no image and no error: the canvas is over the browser's size limit
+      if (blob === null) scale *= SCREENSHOT_SHRINK;
+    }
   } catch (error) {
     // Un canvas pollué — une image du jeu servie depuis un autre domaine — fait
     // jeter toBlob. Le joueur doit l'apprendre : sans quoi il reclique et
@@ -2670,8 +2804,8 @@ async function downloadScreenshot(): Promise<void> {
   if (blob === null) {
     window.alert(
       "Copie d'écran impossible.\n\n" +
-        "Les images du jeu sont peut-être servies depuis un autre domaine, " +
-        "ce qui interdit au navigateur de les lire.",
+        "Le jeu est peut-être trop grand pour ce navigateur, ou ses images " +
+        "sont servies depuis un autre domaine, ce qui interdit de les lire.",
     );
     return;
   }
@@ -2687,21 +2821,22 @@ async function downloadScreenshot(): Promise<void> {
   setTimeout(() => URL.revokeObjectURL(link.href), 0);
 }
 
-const screenshotLink = document.getElementById("screenshot-link") as HTMLButtonElement | null;
 if (screenshotLink) {
   screenshotLink.addEventListener("click", () => {
-    // L'encodage d'une grande surface prend une fraction de seconde : sans ça,
-    // deux clics rapides lancent deux téléchargements et le second échoue.
-    if (screenshotLink.disabled) return;
-    screenshotLink.disabled = true;
+    // no capture with a token in hand, nor a second one while the first is
+    // still being encoded: a large image takes a moment
+    if (capturing || hand.length > 0) return;
+    capturing = true;
+    updateScreenshotAvailability();
     void downloadScreenshot().finally(() => {
-      screenshotLink.disabled = false;
+      capturing = false;
+      updateScreenshotAvailability();
     });
   });
 }
 
 loadComponents(currentSession?.components);
-setupFixButton(currentSession);
+setupOptionsBar(currentSession);
 // une session déjà connue est resynchronisée par le resume_session, pas par un
 // nouveau chargement de la situation
 componentsLoaded = currentSession?.key !== undefined;
@@ -2761,6 +2896,7 @@ function gameLoop(): void {
 
   stepEdgeScroll(dt);
   draw();
+  updateScreenshotAvailability();
   updateLoadingOverlay();
   flushMoves();
   window.requestAnimationFrame(gameLoop);

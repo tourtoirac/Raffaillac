@@ -193,6 +193,22 @@ pions dans le bandeau d'info (`showComponentId` dans `game.ts`, lu dans
 messages de refus (« Pion réservé à … ») restent affichés, sans le nom. C'est
 un réglage purement client : Tourtoirac transmet `options` tel quel.
 
+« Fixe la position » et « Copie d'écran » sont dans le bandeau `#options-bar`
+de `game.html`, sous l'en-tête (`setupOptionsBar` / `updateOptionsBar` dans
+`game.ts`). « Fixe la position » est masqué pour un spectateur, pour une partie
+close, et quand le jeu pose `options.fix_positions` à `false`. « Copie
+d'écran » est masqué quand le jeu pose `options.screen_capture` à `false`. Il
+ne copie pas le canvas : `downloadScreenshot` redessine le jeu sur un canvas
+hors écran qui couvre tous les composants (`componentsBounds`, plateaux,
+compteurs, sacs, pions, dés), à l'échelle 1:1, sans tenir compte de la caméra
+ni du zoom, et sans grille, boutons ni barre d'info. Si le navigateur refuse
+un canvas de cette taille, l'image est réduite par paliers. Le bouton est
+désactivé tant que le joueur a un pion en main. Les
+deux options sont des booléens, `true` par défaut ; une partie sauvegardée
+avant que `fix_positions` le devienne peut encore porter `null` (masqué) ou
+une position (affiché). Le bandeau disparaît quand il
+n'a plus aucun bouton à montrer.
+
 Le serveur annonce la
 nationalité du siège dans `session_joined` (`myNationality` dans `game.ts`,
 affichée dans le bandeau après le pseudo) ; le lobby l'affiche après chaque

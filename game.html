@@ -67,6 +67,22 @@
     button.back.danger {
       color: #ff8a80;
     }
+    /* Optional second bar, under the save and close bar: the game decides
+       which of its buttons show (options.fix_positions, options.screen_capture). */
+    #options-bar {
+      flex: none;
+      display: flex;
+      justify-content: flex-end;
+      align-items: center;
+      gap: 10px;
+      padding: 6px 20px;
+      box-sizing: border-box;
+      background: #262626;
+      border-top: 1px solid #3a3a3a;
+    }
+    #options-bar[hidden] {
+      display: none;
+    }
     #game-wrapper {
       flex: 1;
       min-height: 0;
@@ -123,12 +139,18 @@
     <span class="back-links">
       <!-- visible pour l'owner seul, tant que la partie n'a pas commencé -->
       <button type="button" class="back" id="start-link" hidden>Démarrer la session</button>
-      <button type="button" class="back" id="screenshot-link">Copie d'écran</button>
       <button type="button" class="back" id="back-link">&larr; Quitter et reprendre plus tard</button>
       <!-- visible pour l'owner seul : le serveur le décide, pas cette page -->
       <button type="button" class="back danger" id="close-link" hidden>Clore la partie et quitter</button>
     </span>
   </header>
+
+  <!-- each button shows unless the game turns it off in its options; the
+       first one is for the players only -->
+  <div id="options-bar" hidden>
+    <button type="button" class="back" id="fix-link" title="Restaure le cadre vert à la position actuelle des pions" hidden>Fixe la position</button>
+    <button type="button" class="back" id="screenshot-link" hidden>Copie d'écran</button>
+  </div>
 
   <div id="game-wrapper">
     <canvas id="gameCanvas"></canvas>

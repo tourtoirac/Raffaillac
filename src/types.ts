@@ -203,18 +203,17 @@ export interface SessionComponents {
   dice?: DiceItem[];
 }
 
-// position du bouton "Fixe la position", choisie par le jeu dans son game_json
-export interface FixPositionButton {
-  x: number;
-  y: number;
-}
-
 export interface SessionOptions {
   /**
-   * absent : le client garde son bouton a sa position par defaut ;
-   * null : le jeu ne veut pas du bouton ; objet : le bouton va a cet endroit
+   * false: the game does not want the "Fixe la position" button in the bar
+   * under the header. Absent or true: the button is shown.
    */
-  fix_positions?: FixPositionButton | null;
+  fix_positions?: boolean | null;
+  /**
+   * null or false: the game does not want the "Copie d'écran" button in that
+   * same bar. Absent or anything else: the button is shown.
+   */
+  screen_capture?: boolean | null;
   /**
    * the sides the game declares, as written in its game_json. The session
    * repeats them, cleaned, in Session.nationalities: read that one.
