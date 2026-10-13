@@ -170,6 +170,16 @@
     #participants li.self {
       font-weight: bold;
     }
+    /* the owner drags the name of a player to another place of the list */
+    #participants li.sortable {
+      cursor: grab;
+    }
+    #participants li.drop-before {
+      box-shadow: 0 -2px 0 #6fcf6f;
+    }
+    #participants li.drop-after {
+      box-shadow: 0 2px 0 #6fcf6f;
+    }
     /* how many tokens that player keeps in its private hand */
     #participants .hand-count {
       margin-left: 6px;
@@ -262,6 +272,71 @@
     #private-hand .hand-item {
       cursor: grab;
     }
+    #show-hands-select {
+      flex: none;
+      padding: 6px 10px;
+      background: #3a3a3a;
+      border: 1px solid #666;
+      border-radius: 4px;
+      color: #eee;
+      font-size: 14px;
+      cursor: pointer;
+    }
+    #show-hands-select[hidden] {
+      display: none;
+    }
+    /* The cards the players show of their hand: over the bottom of the
+       table, right above the private hand they are dragged from. */
+    #show-zones {
+      position: absolute;
+      left: 12px;
+      right: 12px;
+      bottom: 12px;
+      z-index: 5;
+      display: flex;
+      flex-direction: column;
+      gap: 6px;
+    }
+    #show-zones:empty {
+      display: none;
+    }
+    .show-zone {
+      display: flex;
+      align-items: center;
+      gap: 10px;
+      min-height: 104px;
+      padding: 6px 14px;
+      box-sizing: border-box;
+      background: rgba(38, 38, 38, 0.94);
+      border: 1px solid #6f9fcf;
+      border-radius: 6px;
+      color: #ccc;
+      font-size: 14px;
+    }
+    .show-zone .show-label {
+      flex: none;
+    }
+    .show-zone .hand-items {
+      flex: 1;
+      min-width: 0;
+      display: flex;
+      align-items: center;
+      gap: 6px;
+      overflow-x: auto;
+    }
+    .show-zone .show-hint {
+      color: #888;
+      font-style: italic;
+    }
+    .show-zone button {
+      flex: none;
+      padding: 6px 10px;
+      background: #3a3a3a;
+      border: 1px solid #666;
+      border-radius: 4px;
+      color: #eee;
+      cursor: pointer;
+    }
     /* a token whose back the others may not see: a plain card of its shape */
     div.hand-item {
       display: flex;
@@ -319,6 +394,8 @@
 
   <div id="game-wrapper">
     <canvas id="gameCanvas"></canvas>
+    <!-- one area for each player showing cards of its hand to the reader -->
+    <div id="show-zones"></div>
     <!-- filled from the participants the server sends at each arrival or departure -->
     <aside id="participants" aria-label="Joueurs et spectateurs" hidden>
       <ul id="participants-list"></ul>
@@ -336,6 +413,8 @@
   <div id="private-hand" hidden>
     <span class="hand-label">Ma main</span>
     <div id="private-hand-items"></div>
+    <!-- only when options.private_hand.show_hands_to_other_players is true -->
+    <select id="show-hands-select" aria-label="Show hands to" hidden></select>
   </div>
 
   <div id="hand-preview" hidden></div>

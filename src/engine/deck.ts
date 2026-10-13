@@ -24,12 +24,28 @@ const BADGE_MAX_SIZE = 44;
 const BUTTON_HEIGHT = 22;
 const BUTTON_GAP = 4;
 const BUTTON_FILL = "#3a7";
+// A button that would do nothing right now, like a deal without enough cards.
+const BUTTON_DISABLED_FILL = "#999";
 const BUTTON_FONT_MAX = 14;
 // Caption written above the deck when the game gives it a text.
 const TEXT_SIZE = 16;
 const TEXT_GAP = 6;
 
-export type DeckAction = "shuffle" | "refill";
+// The area of a stack, always shown: the cards lie centered inside it.
+const AREA_FILL = "rgba(0, 0, 0, 0.12)";
+const AREA_STROKE = "rgba(0, 0, 0, 0.6)";
+
+// Buttons in the top-right corner of each pile: pressing one and moving away
+// draws that many cards at once.
+export const DRAW_COUNTS = [1, 5, 10] as const;
+const DRAW_BUTTON_WIDTH = 28;
+const DRAW_BUTTON_HEIGHT = 20;
+const DRAW_BUTTON_GAP = 3;
+const DRAW_BUTTON_MARGIN = 4;
+const DRAW_BUTTON_FILL = "rgba(20, 20, 20, 0.85)";
+const DRAW_BUTTON_DISABLED_FILL = "rgba(120, 120, 120, 0.7)";
+
+export type DeckAction = "shuffle" | "refill" | "deal";
 
 /** The buttons of each pile: both piles are shuffled, the discard pile also goes back to the draw. */
 const PILE_ACTIONS: Record<DeckPileName, { action: DeckAction; label: string }[]> = {
@@ -48,6 +64,9 @@ export interface DeckPile {
   count: number;
   /** what the top card shows on this pile; null on an empty pile or without picture */
   topImage: HTMLImageElement | null;
+  /** size of the top card; null on an empty pile */
+  topWidth: number | null;
+  topHeight: number | null;
 }
 
 /**
@@ -59,7 +78,12 @@ export interface DeckPile {
  */
 export interface Deck {
   readonly name: string;
-  /** size of one pile, that is of one card */
+  /**
+   * A stack: one single pile that deals its cards to the private hands. Its
+   * size is the one of its area, in which the cards are centered.
+   */
+  readonly isStack: boolean;
+  /** size of one pile, that is of one card; for a stack, of its area */
   readonly width: number;
   readonly height: number;
   /** caption written above the deck, or null when the game gives none */
@@ -72,6 +96,21 @@ export interface DeckButton {
   readonly pile: DeckPile;
   readonly action: DeckAction;
   readonly label: string;
+  /** false when a click would do nothing: the button is grayed out */
+  readonly enabled: boolean;
+  readonly x: number;
+  readonly y: number;
+  readonly width: number;
+  readonly height: number;
+}
+
+export interface DrawButton {
+  readonly deck: Deck;
+  readonly pile: DeckPile;
+  /** how many cards the button draws */
+  readonly count: number;
+  /** false when the pile does not hold that many cards: the button is grayed out */
+  readonly enabled: boolean;
   readonly x: number;
   readonly y: number;
   readonly width: number;
@@ -104,6 +143,8 @@ function readPiles(item: DeckItem): DeckPile[] {
       y: pile.y,
       count: pile.count,
       topImage: imageOf(pile.top?.src),
+      topWidth: pile.top?.width ?? null,
+      topHeight: pile.top?.height ?? null,
     });
   }
   return piles;
@@ -112,6 +153,7 @@ function readPiles(item: DeckItem): DeckPile[] {
 export function createDeck(item: DeckItem): Deck {
   return {
     name: item.id,
+    isStack: item.kind === "stack",
     width: item.width,
     height: item.height,
     text: typeof item.text === "string" && item.text !== "" ? item.text : null,
@@ -147,29 +189,124 @@ export function pileUnder(decks: Deck[], counter: Counter): DeckPile | null {
   return pileAt(decks, counter.x + counter.width / 2, counter.y + counter.height / 2)?.pile ?? null;
 }
 
-// The buttons of a deck, one row each under their pile.
-export function deckButtons(deck: Deck): DeckButton[] {
-  return deck.piles.flatMap((pile) =>
-    PILE_ACTIONS[pile.name].map((entry, row) => ({
+/**
+ * The buttons of a deck, one row each under their pile.
+ * @param dealTo the number of players a stack would deal to, or null when
+ *   the game has no private hand: a stack then has no Deal button
+ */
+export function deckButtons(deck: Deck, dealTo: number | null): DeckButton[] {
+  return deck.piles.flatMap((pile) => {
+    const entries = PILE_ACTIONS[pile.name].map((entry) => ({ ...entry, enabled: true }));
+    if (deck.isStack && dealTo !== null) {
+      // a deal gives one card to each player, or none at all
+      entries.push({ action: "deal", label: "Deal", enabled: dealTo > 0 && pile.count >= dealTo });
+    }
+    return entries.map((entry, row) => ({
       deck,
       pile,
       action: entry.action,
       label: entry.label,
+      enabled: entry.enabled,
       x: pile.x,
       y: pile.y + deck.height + BUTTON_GAP + row * (BUTTON_HEIGHT + BUTTON_GAP),
       width: deck.width,
       height: BUTTON_HEIGHT,
+    }));
+  });
+}
+
+// The draw buttons of a deck: one row in the top-right corner of each pile,
+// narrowed when the pile is too small for three buttons of full width.
+export function drawButtons(deck: Deck): DrawButton[] {
+  const room = deck.width - 2 * DRAW_BUTTON_MARGIN - (DRAW_COUNTS.length - 1) * DRAW_BUTTON_GAP;
+  const width = Math.max(4, Math.min(DRAW_BUTTON_WIDTH, room / DRAW_COUNTS.length));
+  const height = Math.min(DRAW_BUTTON_HEIGHT, deck.height / 3);
+  return deck.piles.flatMap((pile) =>
+    DRAW_COUNTS.map((count, column) => ({
+      deck,
+      pile,
+      count,
+      enabled: pile.count >= count,
+      // the last button ends at the right margin of the pile
+      x:
+        pile.x + deck.width - DRAW_BUTTON_MARGIN - width -
+        (DRAW_COUNTS.length - 1 - column) * (width + DRAW_BUTTON_GAP),
+      y: pile.y + DRAW_BUTTON_MARGIN,
+      width,
+      height,
     })),
   );
 }
 
-export function deckButtonAt(decks: Deck[], x: number, y: number): DeckButton | null {
+export function drawButtonAt(decks: Deck[], x: number, y: number): DrawButton | null {
   for (let i = decks.length - 1; i >= 0; i -= 1) {
-    for (const button of deckButtons(decks[i])) {
+    for (const button of drawButtons(decks[i])) {
       if (inside(x, y, button.x, button.y, button.width, button.height)) return button;
     }
   }
   return null;
+}
+
+export function drawDrawButton(ctx: CanvasRenderingContext2D, button: DrawButton): void {
+  ctx.save();
+  ctx.fillStyle = button.enabled ? DRAW_BUTTON_FILL : DRAW_BUTTON_DISABLED_FILL;
+  ctx.fillRect(button.x, button.y, button.width, button.height);
+  ctx.lineWidth = 1;
+  ctx.strokeStyle = "white";
+  ctx.strokeRect(button.x, button.y, button.width, button.height);
+  ctx.fillStyle = "white";
+  ctx.font = `bold ${Math.max(8, Math.floor(button.height * 0.65))}px Arial`;
+  ctx.textAlign = "center";
+  ctx.textBaseline = "middle";
+  ctx.fillText(String(button.count), button.x + button.width / 2, button.y + button.height / 2, button.width - 2);
+  ctx.restore();
+}
+
+export function deckButtonAt(decks: Deck[], x: number, y: number, dealTo: number | null): DeckButton | null {
+  for (let i = decks.length - 1; i >= 0; i -= 1) {
+    for (const button of deckButtons(decks[i], dealTo)) {
+      if (inside(x, y, button.x, button.y, button.width, button.height)) return button;
+    }
+  }
+  return null;
+}
+
+// The pile of a stack: its area, and the cards centered inside it at their own
+// size, whatever the size of the area.
+function drawStackCards(ctx: CanvasRenderingContext2D, deck: Deck, pile: DeckPile): void {
+  ctx.fillStyle = AREA_FILL;
+  ctx.fillRect(pile.x, pile.y, deck.width, deck.height);
+  ctx.lineWidth = 2;
+  ctx.setLineDash([6, 4]);
+  ctx.strokeStyle = AREA_STROKE;
+  ctx.strokeRect(pile.x, pile.y, deck.width, deck.height);
+  ctx.setLineDash([]);
+  if (pile.count === 0) return;
+
+  const width = pile.topWidth ?? deck.width;
+  const height = pile.topHeight ?? deck.height;
+  const x = pile.x + (deck.width - width) / 2;
+  const y = pile.y + (deck.height - height) / 2;
+  // the cards under the top one, deepest first
+  const edges = Math.min(THICKNESS_MAX, pile.count - 1);
+  for (let edge = edges; edge >= 1; edge -= 1) {
+    const shift = edge * THICKNESS_STEP;
+    ctx.fillStyle = "#ddd";
+    ctx.fillRect(x + shift, y + shift, width, height);
+    ctx.lineWidth = 1;
+    ctx.strokeStyle = "#555";
+    ctx.strokeRect(x + shift, y + shift, width, height);
+  }
+  const image = pile.topImage;
+  if (image !== null && image.complete && image.naturalWidth > 0) {
+    ctx.drawImage(image, x, y, width, height);
+  } else {
+    ctx.fillStyle = FALLBACK_FILL;
+    ctx.fillRect(x, y, width, height);
+    ctx.lineWidth = 3;
+    ctx.strokeStyle = FALLBACK_STROKE;
+    ctx.strokeRect(x, y, width, height);
+  }
 }
 
 /**
@@ -187,7 +324,9 @@ export function drawPile(
   const { width, height } = deck;
   ctx.save();
 
-  if (pile.count === 0) {
+  if (deck.isStack) {
+    drawStackCards(ctx, deck, pile);
+  } else if (pile.count === 0) {
     ctx.fillStyle = EMPTY_FILL;
     ctx.fillRect(x, y, width, height);
     ctx.lineWidth = 2;
@@ -246,7 +385,7 @@ export function drawPile(
 
 export function drawDeckButton(ctx: CanvasRenderingContext2D, button: DeckButton): void {
   ctx.save();
-  ctx.fillStyle = BUTTON_FILL;
+  ctx.fillStyle = button.enabled ? BUTTON_FILL : BUTTON_DISABLED_FILL;
   ctx.fillRect(button.x, button.y, button.width, button.height);
   ctx.lineWidth = 1;
   ctx.strokeStyle = "black";

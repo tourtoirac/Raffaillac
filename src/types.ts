@@ -212,14 +212,17 @@ export interface DeckPileItem {
  * A deck: a fixed component holding cards, and only cards. "single" is one
  * pile, "duo" a draw pile and a discard pile. The cards stay on the server:
  * they come one by one, when they are drawn.
+ *
+ * A "stack" is a deck of one single pile that deals its cards: its width and
+ * height are those of the area the cards are centered in, not of a card.
  */
 export interface DeckItem {
-  kind: "deck";
+  kind: "deck" | "stack";
   id: string;
   type: "single" | "duo";
   x: number;
   y: number;
-  /** size of one pile, that is of one card */
+  /** size of one pile, that is of one card; for a stack, of its area */
   width: number;
   height: number;
   /** caption written above the deck; absent, null or empty, nothing is written */
@@ -229,7 +232,7 @@ export interface DeckItem {
 }
 
 export interface SessionComponents {
-  // a board, a counter, a dice pool, a bag, a deck: whatever does not move with the tokens
+  // a board, a counter, a dice pool, a bag, a deck, a stack: whatever does not move with the tokens
   fixed: (BoardItem | BoardGroupItem | CounterItem | DicePoolItem | BagItem | DeckItem)[];
   movable: TokenItem[];
   // absent d'un Tourtoirac plus ancien : le dé est donc facultatif
@@ -248,6 +251,11 @@ export interface SessionOptions {
    */
   screen_capture?: boolean | null;
   /**
+   * true: the view scrolls when the pointer comes near an edge of the
+   * screen. Absent or anything else: it only moves with the right button.
+   */
+  border_shift?: boolean | null;
+  /**
    * the sides the game declares, as written in its game_json. The session
    * repeats them, cleaned, in Session.nationalities: read that one.
    */
@@ -260,10 +268,10 @@ export interface SessionOptions {
   /** set by the server once the ids have been replaced */
   anonymized?: boolean;
   /**
-   * true: each player keeps tokens and cards in a private hand. Absent or
-   * false, the game has no private hand
+   * an object, even empty: each player keeps tokens and cards in a private
+   * hand. Absent or null, the game has no private hand
    */
-  private_hand?: boolean;
+  private_hand?: PrivateHandOptions | null;
   /**
    * false: the info bar does not show the name and the position of the
    * tokens. Absent or true, it does.
@@ -304,6 +312,8 @@ export interface Session {
   hands?: SessionHands;
   /** the private hand of the reader, with its faces; empty for a watcher */
   hand?: TokenItem[];
+  /** the cards the players show of their hand, as far as the reader may read them */
+  shows?: ShowEvent[];
 }
 
 /**
@@ -317,6 +327,29 @@ export interface HandBack {
 }
 
 export type SessionHands = Record<string, HandBack[]>;
+
+/** what options.private_hand may hold; an empty object is a plain private hand */
+export interface PrivateHandOptions {
+  /** true: a player may show cards of its hand to one or all the other players */
+  show_hands_to_other_players?: boolean;
+  [key: string]: unknown;
+}
+
+/**
+ * The cards a player shows of its private hand, as the reader may read them.
+ * Sent to the players only, at each change and with the session.
+ */
+export interface ShowEvent {
+  event: "show";
+  /** the nickname of the player showing its cards */
+  owner: string;
+  /** "all", the nickname of the one player reading them, or null: nothing is shown to the reader */
+  to: string | null;
+  /** the cards as they are, on the side their owner left them */
+  cards: HandBack[];
+  /** the ids of those cards, for their owner only; empty for anybody else */
+  component_ids: string[];
+}
 
 /** a document of the game ("documents" of its game_json): always a PDF */
 export interface SessionDocument {
@@ -507,9 +540,15 @@ export interface DrawEvent {
   user: string;
   /** the request_id of the draw action, so a client recognises its own */
   request_id?: string | null;
+  /**
+   * a draw of several cards sends one event for each: index counts them from
+   * 0, count is how many came out. Absent from an older Tourtoirac.
+   */
+  index?: number;
+  count?: number;
   /** the card drawn, at the place the server put it; its front is kept back while it lies on its back */
   component_json: TokenItem;
-  /** the deck without that card */
+  /** the deck once every card of this draw is out */
   deck_json: DeckItem;
 }
 
@@ -523,6 +562,22 @@ export interface DeckEvent {
   /** nickname of the player who did it */
   nickname?: string;
   deck_json: DeckItem;
+}
+
+// a stack dealt its top cards, one to the private hand of each player
+export interface DealEvent {
+  event: "deal";
+  /** id of the stack */
+  component_id: string;
+  user: string;
+  /** nickname of the player who dealt */
+  nickname?: string;
+  /** the stack without the cards dealt */
+  deck_json: DeckItem;
+  /** what everybody sees of the private hands after the deal */
+  hands?: SessionHands;
+  /** the cards dealt to the reader, with their front; empty for a watcher */
+  cards?: TokenItem[];
 }
 
 // sous-ensemble de return_json() renvoyé par Tourtoirac pour un composant

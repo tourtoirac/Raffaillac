@@ -76,6 +76,7 @@ Les noms ne correspondent pas : c'est le piège principal.
 | `dice_pool` | `DicePool` | `DicePool` (interface, `engine/dice.ts`) | `DicePoolItem` |
 | `bag`     | `Bag`     | `Bag` (interface, `engine/bag.ts`) | `BagItem` |
 | `deck`    | `Deck`    | `Deck` (interface, `engine/deck.ts`) | `DeckItem` |
+| `stack`   | `Stack`   | `Deck` avec `isStack` (`engine/deck.ts`) | `DeckItem` (`kind: "stack"`) |
 | `card`    | `Card`    | `Counter` avec `isCard` | `TokenItem` (`kind: "card"`) |
 
 Dans `game.ts`, `counters` / `countersById` / `hand` désignent donc des
@@ -202,17 +203,47 @@ Les onglets de jeux (`#tabs-container`) ne listent que les jeux du type
 affiché (`visibleGameNames`). L'onglet courant est gardé dans `?type=` ; sans
 ce paramètre, c'est le type du jeu de `?game=` qui est affiché.
 
+`options.border_shift` : seul `true` active le défilement de la vue quand le
+pointeur approche d'un bord de l'écran (`borderShiftEnabled`, testé dans
+`stepEdgeScroll`). Absent ou autre valeur, la vue ne bouge qu'au bouton droit.
+Réglage purement client.
+
+L'ordre de `#participants` est celui du serveur (ordre d'arrivée des joueurs,
+ou celui choisi par l'owner) : le lecteur n'est plus placé en tête. L'owner
+d'une partie non close déplace le nom d'un joueur par glisser-déposer HTML5
+(`makeParticipantSortable`, `draggedParticipant`) ; le dépôt envoie
+`order_players` avec la liste complète (`requestPlayerOrder`), et le
+`session_status` renvoyé redessine la liste sur tous les écrans.
+
 `#participants`, à droite de la table, liste les pseudos de la partie d'après
 `participants` (`Session` et événement `session_status`, renvoyé par
-Tourtoirac à chaque arrivée ou départ) : le lecteur en premier, puis les
+Tourtoirac à chaque arrivée ou départ) : les
 sièges, puis les spectateurs. Couleurs dans `game.html` : joueur à la table en
 vert, joueur absent (`.absent`) en rouge, spectateur en bleu.
 
-Main privée, seulement si `options.private_hand` vaut `true`
+Montrer des cartes de sa main, seulement si
+`options.private_hand.show_hands_to_other_players` vaut `true`
+(`showHandsEnabled`) : `#show-hands-select`, à droite du bandeau, liste « All
+players » et les autres joueurs (`renderShowSelect`, depuis `participants`) ;
+un choix envoie `show_open`. Les zones (`#show-zones`, une `.show-zone` par
+joueur qui montre, `renderShowZones`) recouvrent le bas de la table, juste
+au-dessus du bandeau, pour que le pointeur ne passe pas par le canvas (ce qui
+jouerait la carte). Relâcher un objet du bandeau sur `#my-show-zone` envoie
+`show_add` (`onMouseUp`, `armedHandItem`) ; le bouton Close envoie
+`show_close`. L'événement `show` (`applyShow`, `showsByOwner`) et
+`session.shows` disent ce que le lecteur lit ; les cartes montrées par le
+lecteur (`component_ids`) restent dans `myHand` mais sont retirées du bandeau
+(`myShownIds`). Un double-clic dans sa propre zone retourne la carte.
+
+Main privée, seulement si `options.private_hand` est un objet, même vide `{}`
+(`null` ou absent : pas de main ; `isPrivateHand`)
 (`privateHandEnabled`) ; sinon le bandeau est caché et le survol d'un pseudo
 n'ouvre pas `#hand-preview`. `#private-hand`, bandeau en bas de page réservé aux joueurs,
-montre `myHand` (les pions que le lecteur garde hors de la table, faces
-visibles). Relâcher un pion au-dessus du bandeau envoie `release` avec
+montre `myHand` (les pions que le lecteur garde hors de la table), chacun
+sur sa face courante (`counter.image`) : une carte entre en main face visible,
+et un double-clic sur un objet du bandeau le retourne (`requestHandFlip`,
+action `flip` ; le serveur ne répond qu'au détenteur, `applyFlip` redessine
+le bandeau). L'objet est rejoué sur la face qu'il montre dans le bandeau. Relâcher un pion au-dessus du bandeau envoie `release` avec
 `hand: true` (`dropHand(toHand)`) ; presser un pion du bandeau puis amener le
 pointeur sur la table envoie `take` (`armedHandItem` → `requestTake`), et sa
 réponse est traitée par `applyPick`, comme un tirage dans un sac. Un simple
@@ -230,10 +261,29 @@ l'image du dessus, relus par `refreshDeck` à chaque `deck_json` reçu
 envoie `draw` (`requestDraw`), dont la réponse passe par `applyPick` comme un
 tirage dans un sac ; les boutons « Shuffle » et « Refill », dessinés sous les
 piles en coordonnées monde et réservés aux joueurs, envoient `shuffle` /
-`refill` (`deckButtonAt` → `requestDeckAction`). Une carte est un `Counter`
+`refill` (`deckButtonAt` → `requestDeckAction`). Trois boutons « 1 », « 5 », « 10 »
+(`drawButtons` dans `engine/deck.ts`) sont dessinés dans le coin haut droit de
+chaque pile, pour les joueurs seulement : presser l'un d'eux **puis déplacer
+le pointeur** bouton enfoncé (`armedDraw`, seuil `LONG_PRESS_SLACK`) envoie
+`draw` avec `count` ; un simple clic ne pioche rien. Un bouton est gris quand
+la pile a moins de cartes que son nombre. Le serveur répond par un événement
+`draw` par carte : la première répond à `pending`, les suivantes sont
+reconnues par `multiDrawId` et rejoignent la main comme les pions d'un appui
+long, en éventail (`DRAW_FAN`, miroir du serveur). Une carte est un `Counter`
 dont `isCard` est vrai : seule elle fait briller une pile (`pileUnder`). Une
 carte piochée arrive sans sa face (`front_src` nul) ; elle la reçoit par
 `flip`, ou par le `release` qui la met dans la main privée du lecteur.
+
+Un `stack` est un `Deck` dont `isStack` est vrai, rangé dans `decks` comme les
+autres : une seule pile, dont `width`/`height` sont ceux de la **zone** de
+dépôt. `drawStackCards` dessine la zone (toujours visible) et la carte du
+dessus **centrée** dedans, à sa taille (`DeckPile.topWidth/topHeight`). Ses
+boutons : « Shuffle », et « Deal » seulement si la main privée est active
+(`dealPlayers()` renvoie alors le nombre de joueurs de `participants`, sinon
+`null`). `DeckButton.enabled` est faux, et le bouton gris, quand la pile a
+moins de cartes que de joueurs : `requestDeckAction` n'envoie alors rien.
+L'événement `deal` passe par `applyDeal` : pile et mains relues, et les
+`cards` reçues (celles du lecteur seulement) rejoignent `myHand`.
 
 `Session.documents` (clé `documents` du `game_json`, des PDF) alimente le menu
 déroulant `#documents-select`, à gauche du bandeau `#options-bar` : première

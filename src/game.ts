@@ -4,14 +4,17 @@ import {
   createDeck,
   deckButtonAt,
   deckButtons,
+  drawButtonAt,
+  drawButtons,
   drawDeckButton,
+  drawDrawButton,
   drawDeckText,
   drawPile,
   pileAt,
   pileUnder,
   updateDeck,
 } from "./engine/deck";
-import type { Deck, DeckButton, DeckPile } from "./engine/deck";
+import type { Deck, DeckButton, DeckPile, DrawButton } from "./engine/deck";
 import { Button } from "./engine/button";
 import { allBoardsLoaded, boardDims, createBoard, createBoardGroup, flipArea, flippedGroup } from "./engine/board";
 import type { Board, BoardGroup } from "./engine/board";
@@ -41,6 +44,8 @@ import type {
   ComponentState,
   CounterItem,
   CounterValueEvent,
+  DealEvent,
+  ShowEvent,
   DeckEvent,
   DeckItem,
   DiceItem,
@@ -185,15 +190,73 @@ function updateParticipants(received: SessionParticipant[] | undefined): void {
   if (!Array.isArray(received)) return;
   participants = received;
   renderParticipants();
+  // the players the hand can be shown to are those of that list
+  renderShowSelect();
+}
+
+// The player line the owner is dragging to another place of the list.
+let draggedParticipant: string | null = null;
+
+function clearParticipantDropMarks(): void {
+  participantsList
+    ?.querySelectorAll(".drop-before, .drop-after")
+    .forEach((line) => line.classList.remove("drop-before", "drop-after"));
+}
+
+// The owner dropped the name of a player on another one: the whole new order
+// is asked for, and every screen gets it back with a session_status.
+function requestPlayerOrder(moved: string, target: string, after: boolean): void {
+  const names = participants
+    .filter((entry) => entry.role === "player" && entry.nickname !== moved)
+    .map((entry) => entry.nickname);
+  const at = names.indexOf(target);
+  if (at < 0) return;
+  names.splice(after ? at + 1 : at, 0, moved);
+  const message = { action: "order_players", nicknames: names };
+  getSocket()?.send(message);
+  console.log("[WS] Envoyé :", JSON.stringify(message));
+}
+
+// Only the owner of a game still open moves the names of the players.
+function makeParticipantSortable(line: HTMLLIElement, nickname: string): void {
+  line.draggable = true;
+  line.classList.add("sortable");
+  line.addEventListener("dragstart", (event) => {
+    draggedParticipant = nickname;
+    hideHandPreview();
+    event.dataTransfer?.setData("text/plain", nickname);
+    if (event.dataTransfer) event.dataTransfer.effectAllowed = "move";
+  });
+  line.addEventListener("dragover", (event) => {
+    if (draggedParticipant === null || draggedParticipant === nickname) return;
+    // accepting the drop is what lets the drop event fire
+    event.preventDefault();
+    const box = line.getBoundingClientRect();
+    const after = event.clientY > box.top + box.height / 2;
+    clearParticipantDropMarks();
+    line.classList.add(after ? "drop-after" : "drop-before");
+  });
+  line.addEventListener("dragleave", () => line.classList.remove("drop-before", "drop-after"));
+  line.addEventListener("drop", (event) => {
+    event.preventDefault();
+    const moved = draggedParticipant;
+    const after = line.classList.contains("drop-after");
+    draggedParticipant = null;
+    clearParticipantDropMarks();
+    if (moved !== null && moved !== nickname) requestPlayerOrder(moved, nickname, after);
+  });
+  line.addEventListener("dragend", () => {
+    draggedParticipant = null;
+    clearParticipantDropMarks();
+  });
 }
 
 function renderParticipants(): void {
   if (!participantsPanel || !participantsList) return;
   const me = loadPlayerIdentity()?.name;
-  const ordered = [
-    ...participants.filter((entry) => entry.nickname === me),
-    ...participants.filter((entry) => entry.nickname !== me),
-  ];
+  // the order is the one of the server: the players as they joined the game,
+  // or as its owner arranged them, then the watchers
+  const ordered = participants;
   participantsList.replaceChildren(
     ...ordered.map((entry) => {
       const line = document.createElement("li");
@@ -202,6 +265,9 @@ function renderParticipants(): void {
       line.classList.add(entry.role === "watcher" ? "watcher" : "player");
       if (!entry.connected) line.classList.add("absent");
       if (entry.nickname === me) line.classList.add("self");
+      if (entry.role === "player" && isOwner && !isClosed) {
+        makeParticipantSortable(line, entry.nickname);
+      }
       // how many tokens this player keeps in its private hand
       const held = entry.role === "player" ? (handsByNickname[entry.nickname]?.length ?? 0) : 0;
       if (held > 0) {
@@ -235,10 +301,17 @@ if (participantsPanel) participantsPanel.addEventListener("mouseleave", hideHand
 // What a player keeps off the table. The reader sees its own hand in a strip
 // across the bottom of the page, with the faces; of the others it only knows
 // how many tokens they hold, and their backs (handsByNickname).
-// options.private_hand of the game: only true turns the private hands on.
+// options.private_hand of the game: an object, even empty, turns the private
+// hands on; null or absent turns them off.
 // Without it the strip is hidden, nothing is released to a hand and the
 // names of the other players show no preview.
 let privateHandEnabled = false;
+
+/** Whether a value of options.private_hand turns the private hands on. */
+function isPrivateHand(value: unknown): boolean {
+  return typeof value === "object" && value !== null && !Array.isArray(value);
+}
+
 const privateHand = document.getElementById("private-hand");
 const privateHandItems = document.getElementById("private-hand-items");
 const handPreview = document.getElementById("hand-preview");
@@ -359,11 +432,15 @@ function renderPrivateHand(): void {
   privateHand.hidden = isWatcher || !privateHandEnabled;
   // the item under the pointer may be leaving the strip
   hideHandZoom();
+  renderShowSelect();
+  // a card shown to other players waits in its area, not in the strip
+  const shownIds = myShownIds();
   privateHandItems.replaceChildren(
-    ...myHand.map((counter) => {
+    ...myHand.filter((counter) => !shownIds.has(counter.name)).map((counter) => {
       const image = document.createElement("img");
-      // the holder reads the front of what it keeps
-      image.src = counter.frontImage.src;
+      // the holder reads the side its token shows: a card joins the hand
+      // face up, and a double click turns over what the hand keeps
+      image.src = counter.image.src;
       image.alt = "";
       image.className = "hand-item";
       image.draggable = false;
@@ -380,9 +457,167 @@ function renderPrivateHand(): void {
         event.preventDefault();
         armedHandItem = counter;
       });
+      image.addEventListener("dblclick", () => requestHandFlip(counter));
       return image;
     }),
   );
+}
+
+// -------------------------------------------------
+// Cards of the hand shown to other players
+// -------------------------------------------------
+// options.private_hand.show_hands_to_other_players: a player opens an area
+// over the table for one other player or for all of them, drags cards of its
+// hand into it, and closes it to get them back. The cards never leave the
+// hand on the server: they are only read by more players (showsByOwner).
+let showHandsEnabled = false;
+const showsByOwner = new Map<string, ShowEvent>();
+const showHandsSelect = document.getElementById("show-hands-select") as HTMLSelectElement | null;
+const showZones = document.getElementById("show-zones");
+const SHOW_TO_ALL = "all";
+// the names the select was last filled with, so that it is only rebuilt when they change
+let showSelectNames = "";
+
+function myShownIds(): Set<string> {
+  const me = loadPlayerIdentity()?.name;
+  return new Set(me ? (showsByOwner.get(me)?.component_ids ?? []) : []);
+}
+
+function sendShow(message: Record<string, unknown>): void {
+  const socket = getSocket();
+  if (!socket) return;
+  socket.send(message);
+  console.log("[WS] Envoyé :", JSON.stringify(message));
+}
+
+// The choices are every other player of the game, and all of them at once.
+function renderShowSelect(): void {
+  if (!showHandsSelect) return;
+  const me = loadPlayerIdentity()?.name;
+  const others = participants
+    .filter((entry) => entry.role === "player" && entry.nickname !== me)
+    .map((entry) => entry.nickname);
+  showHandsSelect.hidden = !showHandsEnabled || isWatcher || others.length === 0;
+  const names = others.join("\n");
+  if (names === showSelectNames && showHandsSelect.options.length > 0) return;
+  showSelectNames = names;
+  const choices: [string, string][] = [
+    ["", "Show hands to ..."],
+    [SHOW_TO_ALL, "All players"],
+    ...others.map((name): [string, string] => [`player:${name}`, name]),
+  ];
+  showHandsSelect.replaceChildren(
+    ...choices.map(([value, label]) => {
+      const option = document.createElement("option");
+      option.value = value;
+      option.textContent = label;
+      return option;
+    }),
+  );
+}
+
+if (showHandsSelect) {
+  showHandsSelect.addEventListener("change", () => {
+    const choice = showHandsSelect.value;
+    // the select works as a button: it goes back to its label
+    showHandsSelect.value = "";
+    if (choice === "") return;
+    sendShow({
+      action: "show_open",
+      to: choice === SHOW_TO_ALL ? SHOW_TO_ALL : choice.slice("player:".length),
+    });
+  });
+}
+
+function showItem(src: string | null, width: number, height: number): HTMLElement {
+  const ratio = height > 0 ? width / height : 1;
+  let item: HTMLElement;
+  if (src) {
+    const image = document.createElement("img");
+    image.src = src;
+    image.alt = "";
+    image.draggable = false;
+    // the pointer on a card shows its picture at its real size
+    image.addEventListener("mouseenter", (event) => showHandZoom(image, event));
+    image.addEventListener("mousemove", (event) => placeHandZoom(event));
+    image.addEventListener("mouseleave", hideHandZoom);
+    item = image;
+  } else {
+    // no picture on that side: a plain card of the shape of the token
+    item = document.createElement("div");
+    item.textContent = "?";
+  }
+  item.className = "hand-item";
+  item.style.width = `${Math.round(80 * ratio)}px`;
+  return item;
+}
+
+// One area for each player showing cards to the reader, its own first.
+function renderShowZones(): void {
+  if (!showZones) return;
+  hideHandZoom();
+  const me = loadPlayerIdentity()?.name;
+  const shows = [...showsByOwner.values()].sort(
+    (a, b) => Number(b.owner === me) - Number(a.owner === me),
+  );
+  showZones.replaceChildren(
+    ...shows.map((show) => {
+      const mine = show.owner === me;
+      const zone = document.createElement("div");
+      zone.className = "show-zone";
+      if (mine) zone.id = "my-show-zone";
+      const label = document.createElement("span");
+      label.className = "show-label";
+      const readers = show.to === SHOW_TO_ALL ? "all players" : show.to;
+      label.textContent = mine ? `Shown to ${readers}` : `Shown by ${show.owner}`;
+      const items = document.createElement("div");
+      items.className = "hand-items";
+      if (mine) {
+        // the owner knows its cards: a double click turns one over, as in the strip
+        for (const id of show.component_ids) {
+          const counter = countersById.get(id);
+          if (!counter) continue;
+          const item = showItem(counter.image.src, counter.width, counter.height);
+          item.addEventListener("dblclick", () => requestHandFlip(counter));
+          items.append(item);
+        }
+        if (items.childElementCount === 0) {
+          const hint = document.createElement("span");
+          hint.className = "show-hint";
+          hint.textContent = "Drag cards from your hand here";
+          items.append(hint);
+        }
+      } else {
+        items.append(...show.cards.map((card) => showItem(card.src, card.width, card.height)));
+      }
+      zone.append(label, items);
+      if (mine) {
+        const close = document.createElement("button");
+        close.type = "button";
+        close.textContent = "Close";
+        close.addEventListener("click", () => sendShow({ action: "show_close" }));
+        zone.append(close);
+      }
+      return zone;
+    }),
+  );
+}
+
+// The server says what the reader now reads of the area of a player; to is
+// null once it is closed, or not meant for the reader.
+function applyShow(message: ShowEvent): void {
+  if (message.to === null) showsByOwner.delete(message.owner);
+  else showsByOwner.set(message.owner, message);
+  renderShowZones();
+  // the cards of the reader come and go between its area and the strip
+  renderPrivateHand();
+}
+
+function overMyShowZone(clientX: number, clientY: number): boolean {
+  const zone = document.getElementById("my-show-zone");
+  if (!zone) return false;
+  const box = zone.getBoundingClientRect();
+  return clientX >= box.left && clientX <= box.right && clientY >= box.top && clientY <= box.bottom;
 }
 
 function overPrivateHand(clientX: number, clientY: number): boolean {
@@ -506,7 +741,7 @@ const bagsById = new Map<string, Bag>();
 
 // decks are "fixed" components too: a released card goes on top of one of
 // their piles, a click takes the top card out. The cards they hold stay on
-// the server.
+// the server. A stack is a deck of one pile that deals its cards.
 let decks: Deck[] = [];
 const decksById = new Map<string, Deck>();
 
@@ -581,7 +816,7 @@ function loadComponents(components: SessionComponents | undefined): void {
 
   decksById.clear();
   decks = (components?.fixed ?? [])
-    .filter((item) => item.kind === "deck")
+    .filter((item) => item.kind === "deck" || item.kind === "stack")
     .map((item) => createDeck(item as DeckItem));
   for (const deck of decks) {
     decksById.set(deck.name, deck);
@@ -1200,6 +1435,10 @@ function centerCameraOn(counter: Counter): void {
 let edgeX = -1;
 let edgeY = -1;
 
+// options.border_shift of the game: only true turns the scrolling at the
+// edges of the screen on. Without it the view only moves with the right button.
+let borderShiftEnabled = false;
+
 // Proximité d'un bord, en fraction de la vitesse maximale : 1 sur le bord
 // même, 0 dès qu'on en sort. On normalise par la bande, pour que la taille de
 // la fenêtre n'ait pas d'effet sur la façon dont le défilement s'enclenche.
@@ -1248,7 +1487,7 @@ function edgeScrollVector(): [number, number] {
 // ne translate la main que si elle est pleine — un pointeur qui traîne au bord
 // avec la main vide ne doit pas secouer des pions que personne ne tient.
 function stepEdgeScroll(dt: number): void {
-  if (!edgeScrolling()) return;
+  if (!borderShiftEnabled || !edgeScrolling()) return;
 
   const [vx, vy] = edgeScrollVector();
   if (vx === 0 && vy === 0) return;
@@ -1317,6 +1556,29 @@ const LONG_PRESS_SLACK = 6;
 let longPressTimer: ReturnType<typeof setTimeout> | null = null;
 let pressScreenX = 0;
 let pressScreenY = 0;
+
+// The 1 / 5 / 10 button of a pile the left button went down on, and where on
+// screen. The cards are only asked for once the pointer moves away with the
+// button still down: a simple click draws nothing.
+let armedDraw: DrawButton | null = null;
+let armedDrawScreenX = 0;
+let armedDrawScreenY = 0;
+
+// The request of a draw of several cards: one event answers for each card,
+// while `pending` only waits for the first.
+let multiDrawId: string | null = null;
+let multiDrawTimer: ReturnType<typeof setTimeout> | null = null;
+// how far apart, in world pixels, the cards of one draw lie in the hand;
+// mirrors DRAW_FAN on the server
+const DRAW_FAN = 20;
+
+function clearMultiDraw(): void {
+  multiDrawId = null;
+  if (multiDrawTimer !== null) {
+    clearTimeout(multiDrawTimer);
+    multiDrawTimer = null;
+  }
+}
 
 // Tokens asked for by a long press, whose acquire is not answered yet. They
 // are several at once, so `pending`, which follows one request, cannot tell
@@ -1453,6 +1715,8 @@ function applyHandEvent(answer: HandEvent, isOwnRequest: boolean, fromStack = fa
       // on its back; the others receive nothing new
       const kept = release.component_json as Partial<TokenItem> | undefined;
       if (kept) counter.setFaces(kept.front_src, kept.back_src);
+      // a card joins a hand face up, whatever side it showed on the table
+      if (kept?.side !== undefined) counter.setSide(kept.side);
       // the token went to the private hand of a player: it leaves the table
       putInPrivateHand(counter, release.hand_of);
     } else if (release.deck_id) {
@@ -1577,9 +1841,10 @@ function refreshDeck(item: DeckItem | null | undefined): void {
   if (deck !== undefined) updateDeck(deck, item);
 }
 
-// The client only says which pile it clicked and where: the server takes the
-// top card and puts it in the hand of the player.
-function requestDraw(deck: Deck, pile: DeckPile, x: number, y: number): void {
+// The client only says which pile it clicked, where, and how many cards it
+// wants: the server takes them from the top and puts them in the hand of the
+// player.
+function requestDraw(deck: Deck, pile: DeckPile, x: number, y: number, count = 1): void {
   // an empty pile has nothing to give: the server would refuse anyway
   if (pile.count === 0) return;
   if (!isStarted) {
@@ -1600,18 +1865,37 @@ function requestDraw(deck: Deck, pile: DeckPile, x: number, y: number): void {
     action: "draw",
     component_id: deck.name,
     pile: pile.name,
+    count,
     x,
     y,
     request_id: requestId,
   };
   setPending("draw", deck.name, requestId);
+  clearMultiDraw();
+  if (count > 1) {
+    // the cards after the first are recognised by this id
+    multiDrawId = requestId;
+    multiDrawTimer = setTimeout(clearMultiDraw, RESPONSE_TIMEOUT);
+  }
   socket.send(message);
   console.log("[WS] Envoyé :", JSON.stringify(message));
 }
 
-// A click on a button of a deck: shuffle a pile, or put the discard pile back
-// into the draw pile. The server answers the whole session with the deck.
+// The number of players a stack deals to, one card each: every seat of the
+// game. Null when the game has no private hand: nothing can be dealt.
+function dealPlayers(): number | null {
+  if (!privateHandEnabled) return null;
+  return participants.filter((entry) => entry.role === "player").length;
+}
+
+// A click on a button of a deck: shuffle a pile, put the discard pile back
+// into the draw pile, or deal a stack. The server answers the whole session
+// with the deck.
 function requestDeckAction(button: DeckButton): void {
+  if (!button.enabled) {
+    counterInfoText = "Pas assez de cartes pour en donner une à chaque joueur";
+    return;
+  }
   if (!isStarted) {
     warnGameNotStarted();
     return;
@@ -1639,15 +1923,45 @@ function applyDeckEvent(message: DeckEvent): void {
   counterInfoText = `${who} ${what}`;
 }
 
+// A stack dealt one card to each player: every screen reads the stack and the
+// hands again, and the reader gets its own card in its private hand.
+function applyDeal(message: DealEvent): void {
+  refreshDeck(message.deck_json);
+  setHands(message.hands);
+  for (const card of message.cards ?? []) {
+    let counter = countersById.get(card.id);
+    if (counter === undefined) {
+      // the cards of a stack stay on the server until they leave it
+      counter = createCounter(card);
+      countersById.set(counter.name, counter);
+    }
+    counter.setFaces(card.front_src, card.back_src);
+    if (card.side !== undefined) counter.setSide(card.side);
+    if (!myHand.includes(counter)) myHand.push(counter);
+  }
+  renderPrivateHand();
+  counterInfoText = `${message.nickname ?? "Un joueur"} a distribué une carte à chaque joueur`;
+}
+
 // A token came out of a bag, of a deck or of the private hand of a player,
 // applied by every screen: it is back on the table, above the others, in the
 // mouse hand of the player who picked it.
 function applyPick(message: PickEvent | TakeEvent | DrawEvent): void {
+  // a card of a draw of several, after the first one: `pending` is already
+  // answered, the request id alone tells it is ours
+  const drawIndex = message.event === "draw" ? (message.index ?? 0) : 0;
+  const laterCard =
+    message.event === "draw" &&
+    drawIndex > 0 &&
+    multiDrawId !== null &&
+    multiDrawId === message.request_id;
   const isOwnRequest =
-    pending?.action === message.event &&
-    pending.requestId !== undefined &&
-    pending.requestId === message.request_id;
-  if (isOwnRequest) clearPending();
+    laterCard ||
+    (pending?.action === message.event &&
+      pending.requestId !== undefined &&
+      pending.requestId === message.request_id);
+  if (isOwnRequest && !laterCard) clearPending();
+  if (laterCard && drawIndex >= (message as DrawEvent).count! - 1) clearMultiDraw();
   if (message.event === "take") setHands(message.hands);
   if (message.event === "draw") refreshDeck(message.deck_json);
 
@@ -1681,15 +1995,23 @@ function applyPick(message: PickEvent | TakeEvent | DrawEvent): void {
   if (isOwnRequest) {
     // the pointer may have moved since the button went down: the token comes
     // out under it, and is put down where the button comes up
-    counter.x = lastMouseWorldX - counter.width / 2;
+    // the cards of one draw lie side by side, so the player sees them all
+    counter.x = lastMouseWorldX - counter.width / 2 + drawIndex * DRAW_FAN;
     counter.y = lastMouseWorldY - counter.height / 2;
     movesDirty = true;
+  }
+  if (laterCard) {
+    // the card joins the hand like a token of a long press, already under
+    // the pointer: it has nothing to catch up with
+    grabWorldX = lastMouseWorldX;
+    grabWorldY = lastMouseWorldY;
   }
 
   // from here on, the token is taken in hand like one acquired on the table
   applyHandEvent(
     { event: "acquire", component_id: counter.name, user: message.user, success: true },
     isOwnRequest,
+    laterCard,
   );
 }
 
@@ -1818,6 +2140,17 @@ function requestFlip(counter: Counter): void {
   console.log("[WS] Envoyé :", JSON.stringify(message));
 }
 
+// A double click on a token of the private hand turns it over there. Only the
+// holder sees it: the server answers this screen alone. The token will be
+// played on the side it shows in the hand.
+function requestHandFlip(counter: Counter): void {
+  const socket = getSocket();
+  if (!socket || !counter.flippable) return;
+  const message = { action: "flip", component_id: counter.name };
+  socket.send(message);
+  console.log("[WS] Envoyé :", JSON.stringify(message));
+}
+
 // le pion s'est retourné : appliqué par tous les écrans, comme la rotation
 function applyFlip(message: FlipEvent): void {
   const counter = countersById.get(message.component_id);
@@ -1825,6 +2158,11 @@ function applyFlip(message: FlipEvent): void {
   // the face now shown may be one the server had kept back until this flip
   counter.setFaces(message.front_src, message.back_src);
   counter.setSide(message.side);
+  // a token of the private hand was turned over there: the strip shows it
+  if (myHand.includes(counter)) {
+    renderPrivateHand();
+    renderShowZones();
+  }
 }
 
 // A token that belongs to a nationality is only taken by a player of that
@@ -2008,10 +2346,10 @@ function onMouseDown(event: MouseEvent): void {
       }
     }
 
-    // click on a button of a deck: shuffle, or refill. Like the + and - of a
-    // counter, the buttons come before a token lying over them.
+    // click on a button of a deck: shuffle, refill or deal. Like the + and -
+    // of a counter, the buttons come before a token lying over them.
     if (hand.length === 0) {
-      const deckButton = deckButtonAt(decks, lx, ly);
+      const deckButton = deckButtonAt(decks, lx, ly, dealPlayers());
       if (deckButton !== null) {
         requestDeckAction(deckButton);
         return;
@@ -2062,6 +2400,20 @@ function onMouseDown(event: MouseEvent): void {
       releaseOnArrival = false;
       grabbedName = null;
       requestPick(clickedBag, lx, ly);
+      return;
+    }
+
+    // button down on a 1 / 5 / 10 button of a pile: the cards come out once
+    // the pointer moves away with the button still down
+    const drawButton = hand.length === 0 ? drawButtonAt(decks, lx, ly) : null;
+    if (drawButton !== null) {
+      if (drawButton.enabled) {
+        armedDraw = drawButton;
+        armedDrawScreenX = sx;
+        armedDrawScreenY = sy;
+      } else {
+        counterInfoText = `Il reste moins de ${drawButton.count} cartes`;
+      }
       return;
     }
 
@@ -2129,6 +2481,23 @@ function onMouseMove(event: MouseEvent): void {
     }
   }
 
+  // the pointer leaves a 1 / 5 / 10 button of a pile with the button down:
+  // that many cards are drawn, and follow the pointer
+  if (armedDraw !== null) {
+    if ((event.buttons & MOUSE_LEFT_MASK) === 0) {
+      armedDraw = null;
+    } else if (Math.hypot(sx - armedDrawScreenX, sy - armedDrawScreenY) > LONG_PRESS_SLACK) {
+      const button = armedDraw;
+      armedDraw = null;
+      if (pending === null && hand.length === 0) {
+        dragging = true;
+        releaseOnArrival = false;
+        grabbedName = null;
+        requestDraw(button.deck, button.pile, lx, ly, button.count);
+      }
+    }
+  }
+
   // the pointer left the press point: this is a drag, not a long press
   if (
     longPressTimer !== null &&
@@ -2166,7 +2535,12 @@ function onMouseUp(event: MouseEvent): void {
   // only releasing the right button ends the camera move
   if (event.button === MOUSE_RIGHT) panning = false;
   if (event.button === MOUSE_LEFT) {
+    // a card of the strip released on the area of the reader is shown there
+    if (armedHandItem !== null && overMyShowZone(event.clientX, event.clientY)) {
+      sendShow({ action: "show_add", component_id: armedHandItem.name });
+    }
     armedHandItem = null;
+    armedDraw = null;
     dropHand(overPrivateHand(event.clientX, event.clientY));
     privateHand?.classList.remove("drop-target");
   }
@@ -2616,6 +2990,10 @@ function handleServerMessage(raw: unknown): void {
       applyPick(data as unknown as DrawEvent);
     } else if (data.event === "shuffle" || data.event === "refill") {
       applyDeckEvent(data as unknown as DeckEvent);
+    } else if (data.event === "deal") {
+      applyDeal(data as unknown as DealEvent);
+    } else if (data.event === "show") {
+      applyShow(data as unknown as ShowEvent);
     } else if (data.event === "move") {
       applyRemoteMove(data as unknown as MoveEvent);
     } else if (data.event === "roll") {
@@ -2985,7 +3363,10 @@ function handleSessionEvent(data: GameServerMessage): void {
   updateSessionInfo();
   setupOptionsBar(session);
   showComponentId = session.options?.component_id_display !== false;
-  privateHandEnabled = session.options?.private_hand === true;
+  privateHandEnabled = isPrivateHand(session.options?.private_hand);
+  showHandsEnabled =
+    privateHandEnabled && session.options?.private_hand?.show_hands_to_other_players === true;
+  borderShiftEnabled = session.options?.border_shift === true;
   // a name already on screen goes away with the option
   if (!showComponentId) counterInfoText = "";
 
@@ -3004,6 +3385,12 @@ function handleSessionEvent(data: GameServerMessage): void {
     });
   }
   setHands(session.hands);
+  // what the players show of their hand is told again with each session
+  if (Array.isArray(session.shows)) {
+    showsByOwner.clear();
+    for (const show of session.shows) showsByOwner.set(show.owner, show);
+  }
+  renderShowZones();
   renderPrivateHand();
 
   // le setup en attente n'est lu qu'avec la situation initiale, comme elle. Le
@@ -3075,6 +3462,8 @@ function updateLeaveLinks(): void {
   }
   // the role and the closing of the game also decide of the options bar
   updateOptionsBar();
+  // only the owner moves the names of the list of players
+  renderParticipants();
   // and of the private hand, which a watcher does not have
   renderPrivateHand();
   if (!closeLink) return;
@@ -3228,7 +3617,12 @@ function drawDecks(
       });
     }
     if (withButtons) {
-      for (const button of deckButtons(deck)) {
+      for (const button of drawButtons(deck)) {
+        drawAtDisplay(context, button.x, button.y, button.width, button.height, () => {
+          drawDrawButton(context, button);
+        });
+      }
+      for (const button of deckButtons(deck, dealPlayers())) {
         drawAtDisplay(context, button.x, button.y, button.width, button.height, () => {
           drawDeckButton(context, button);
         });
