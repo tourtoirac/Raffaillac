@@ -32,6 +32,10 @@ import {
 import type { CounterAction, CounterBox } from "./engine/counter_box";
 import { Dice } from "./engine/dice";
 import type { DicePool } from "./engine/dice";
+// shared with the other OBG front ends: OBG/Common/resources
+import flipHandIcon from "../../Common/resources/flip_hand.svg";
+// inlined as markup: drawn in currentColor, it takes the color of the name
+import handCardsIcon from "../../Common/resources/hand_cards.svg?raw";
 import { lobbyReturnUrl, originGameName } from "./navigation";
 import { acquireGameLock, GAME_OPEN_ELSEWHERE_MESSAGE } from "./gameLock";
 import { invalidComponentMessage } from "./serverErrors";
@@ -46,6 +50,7 @@ import type {
   CounterValueEvent,
   DealEvent,
   ShowEvent,
+  GiveEvent,
   DeckEvent,
   DeckItem,
   DiceItem,
@@ -260,8 +265,16 @@ function renderParticipants(): void {
   participantsList.replaceChildren(
     ...ordered.map((entry) => {
       const line = document.createElement("li");
-      line.textContent = entry.nickname;
+      // with private hands, each player has a hand: an icon before its name
+      if (privateHandEnabled && entry.role === "player") {
+        const icon = document.createElement("span");
+        icon.className = "hand-icon";
+        icon.innerHTML = handCardsIcon;
+        line.append(icon);
+      }
+      line.append(entry.nickname);
       line.title = entry.nickname;
+      line.dataset.nickname = entry.nickname;
       line.classList.add(entry.role === "watcher" ? "watcher" : "player");
       if (!entry.connected) line.classList.add("absent");
       if (entry.nickname === me) line.classList.add("self");
@@ -279,6 +292,8 @@ function renderParticipants(): void {
       }
       // the pointer on the name of another player shows the backs of its hand
       if (entry.nickname !== me && entry.role === "player") {
+        // a card carried by the reader is given to that player when released here
+        if (privateHandEnabled && !isWatcher) line.classList.add("hand-receiver");
         line.addEventListener("mouseenter", () => showHandPreview(entry.nickname, line));
         line.addEventListener("mouseleave", hideHandPreview);
       }
@@ -293,6 +308,21 @@ function renderParticipants(): void {
 }
 
 if (participantsPanel) participantsPanel.addEventListener("mouseleave", hideHandPreview);
+
+// The other player whose name is under the pointer, when a token released
+// there would join its private hand; null anywhere else.
+function receiverAt(clientX: number, clientY: number): string | null {
+  const target = document.elementFromPoint(clientX, clientY);
+  const line = target?.closest<HTMLElement>("#participants li.hand-receiver");
+  return line?.dataset.nickname ?? null;
+}
+
+// Lights the name a release would give the carried token to.
+function highlightReceiver(nickname: string | null): void {
+  participantsList?.querySelectorAll<HTMLElement>("li.hand-receiver").forEach((line) => {
+    line.classList.toggle("drop-target", line.dataset.nickname === nickname);
+  });
+}
 
 // -------------------------------------------------
 // Private hands
@@ -314,6 +344,7 @@ function isPrivateHand(value: unknown): boolean {
 
 const privateHand = document.getElementById("private-hand");
 const privateHandItems = document.getElementById("private-hand-items");
+const flipHandButton = document.getElementById("flip-hand-button") as HTMLButtonElement | null;
 const handPreview = document.getElementById("hand-preview");
 
 let myHand: Counter[] = [];
@@ -435,6 +466,12 @@ function renderPrivateHand(): void {
   renderShowSelect();
   // a card shown to other players waits in its area, not in the strip
   const shownIds = myShownIds();
+  // the icon turns over every card of the strip: nothing to do without one
+  if (flipHandButton) {
+    flipHandButton.disabled = !myHand.some(
+      (counter) => !shownIds.has(counter.name) && counter.flippable,
+    );
+  }
   privateHandItems.replaceChildren(
     ...myHand.filter((counter) => !shownIds.has(counter.name)).map((counter) => {
       const image = document.createElement("img");
@@ -552,6 +589,24 @@ function showItem(src: string | null, width: number, height: number): HTMLElemen
   return item;
 }
 
+// A shown card with its rank in the area, the same on the screen of the
+// owner and on those of its readers. The server gives each card its rank when
+// it is shown: a card leaving the area does not change the others.
+function showRank(show: ShowEvent, index: number): number {
+  // an older Tourtoirac sends no rank: the position stands for it
+  return show.ranks?.[index] ?? index + 1;
+}
+
+function numberedShowItem(item: HTMLElement, rank: number): HTMLElement {
+  const card = document.createElement("div");
+  card.className = "show-card";
+  const badge = document.createElement("span");
+  badge.className = "show-rank";
+  badge.textContent = String(rank);
+  card.append(item, badge);
+  return card;
+}
+
 // One area for each player showing cards to the reader, its own first.
 function renderShowZones(): void {
   if (!showZones) return;
@@ -574,13 +629,22 @@ function renderShowZones(): void {
       items.className = "hand-items";
       if (mine) {
         // the owner knows its cards: a double click turns one over, as in the strip
-        for (const id of show.component_ids) {
+        show.component_ids.forEach((id, index) => {
           const counter = countersById.get(id);
-          if (!counter) continue;
+          if (!counter) return;
           const item = showItem(counter.image.src, counter.width, counter.height);
           item.addEventListener("dblclick", () => requestHandFlip(counter));
-          items.append(item);
-        }
+          // grabbed like a card of the strip: dropped on the table it is
+          // played, dropped on the strip it is hidden again
+          item.classList.add("grabbable");
+          item.addEventListener("mousedown", (event) => {
+            if (event.button !== MOUSE_LEFT) return;
+            hideHandZoom();
+            event.preventDefault();
+            armedHandItem = counter;
+          });
+          items.append(numberedShowItem(item, showRank(show, index)));
+        });
         if (items.childElementCount === 0) {
           const hint = document.createElement("span");
           hint.className = "show-hint";
@@ -588,7 +652,9 @@ function renderShowZones(): void {
           items.append(hint);
         }
       } else {
-        items.append(...show.cards.map((card) => showItem(card.src, card.width, card.height)));
+        items.append(...show.cards.map((card, index) =>
+          numberedShowItem(showItem(card.src, card.width, card.height), showRank(show, index)),
+        ));
       }
       zone.append(label, items);
       if (mine) {
@@ -2151,6 +2217,61 @@ function requestHandFlip(counter: Counter): void {
   console.log("[WS] Envoyé :", JSON.stringify(message));
 }
 
+// The icon left of the strip turns over every card the strip shows, each one
+// on its own: a flip per card, answered to this screen alone like a double
+// click. A card shown to other players stays as it is.
+function requestHandFlipAll(): void {
+  const shownIds = myShownIds();
+  for (const counter of myHand) {
+    if (!shownIds.has(counter.name)) requestHandFlip(counter);
+  }
+}
+
+if (flipHandButton) {
+  flipHandButton.style.backgroundImage = `url("${flipHandIcon}")`;
+  flipHandButton.addEventListener("click", requestHandFlipAll);
+}
+
+// A token of the strip, or of the area the reader shows, released on the name
+// of another player: it goes straight into that hand.
+function requestGive(counter: Counter, nickname: string): void {
+  if (!isStarted) {
+    warnGameNotStarted();
+    return;
+  }
+  if (missingPlayers.length > 0) {
+    warnPlayersMissing();
+    return;
+  }
+  const socket = getSocket();
+  if (!socket) return;
+  const message = { action: "give", component_id: counter.name, to: nickname };
+  socket.send(message);
+  console.log("[WS] Envoyé :", JSON.stringify(message));
+}
+
+// A token went from one private hand to another: the counts change for
+// everyone, the strip of the giver and of the receiver too.
+function applyGive(message: GiveEvent): void {
+  setHands(message.hands);
+  const counter = countersById.get(message.component_id);
+  if (!counter) return;
+  const me = loadPlayerIdentity()?.name;
+  if (message.nickname === me) {
+    myHand = myHand.filter((candidate) => candidate !== counter);
+  }
+  if (message.to === me) {
+    // the receiver reads the face of the card it was given
+    const given = message.component_json;
+    if (given) {
+      counter.setFaces(given.front_src, given.back_src);
+      if (given.side !== undefined) counter.setSide(given.side);
+    }
+    if (!myHand.includes(counter)) myHand.push(counter);
+  }
+  renderPrivateHand();
+}
+
 // le pion s'est retourné : appliqué par tous les écrans, comme la rotation
 function applyFlip(message: FlipEvent): void {
   const counter = countersById.get(message.component_id);
@@ -2211,27 +2332,61 @@ function requestAcquire(counter: Counter): boolean {
 
 // toHand: the token is released over the private hand of the player, and the
 // server keeps it there instead of putting it down.
-function requestRelease(counter: Counter, toHand = false): void {
+// pile: the pile the card must join, whatever lies under its own center
+function requestRelease(
+  counter: Counter,
+  toHand = false,
+  pile: { deck: Deck; pile: DeckPile } | null = null,
+  toPlayer: string | null = null,
+): void {
   const socket = getSocket();
   if (!socket) return;
 
   // on envoie la position brute du dépôt : c'est le serveur qui décide du
-  // recadrage et du rectangle vert, puis qui renvoie l'état corrigé
+  // recadrage et du rectangle vert, puis qui renvoie l'état corrigé.
+  // A card sent to a pile is sent centered on it: the server puts a card in
+  // the pile its center lies on.
   const message = {
     action: "release",
     component_id: counter.name,
-    x: counter.x,
-    y: counter.y,
+    x: pile ? pile.pile.x + (pile.deck.width - counter.width) / 2 : counter.x,
+    y: pile ? pile.pile.y + (pile.deck.height - counter.height) / 2 : counter.y,
     ...(toHand ? { hand: true } : {}),
+    // the hand of another player, the token being released on its name
+    ...(toHand && toPlayer !== null ? { to_player: toPlayer } : {}),
   };
   setPending("release", counter.name);
   socket.send(message);
   console.log("[WS] Envoyé :", JSON.stringify(message));
 }
 
+// The pile a group of cards in hand joins as a whole: the one under the
+// pointer, else the one most of the cards hover over. A single card keeps the
+// rule of its center: null.
+function groupTargetPile(): { deck: Deck; pile: DeckPile } | null {
+  const cards = hand.filter((counter) => counter.isCard);
+  if (cards.length < 2) return null;
+  const underPointer = pileAt(decks, lastMouseWorldX, lastMouseWorldY);
+  if (underPointer !== null) return underPointer;
+  let best: { deck: Deck; pile: DeckPile } | null = null;
+  let bestVotes = 0;
+  const votes = new Map<DeckPile, number>();
+  for (const card of cards) {
+    const found = pileAt(decks, card.x + card.width / 2, card.y + card.height / 2);
+    if (found === null) continue;
+    const count = (votes.get(found.pile) ?? 0) + 1;
+    votes.set(found.pile, count);
+    if (count > bestVotes) {
+      best = found;
+      bestVotes = count;
+    }
+  }
+  return best;
+}
+
 // The left button came up: whatever is in hand is put down where it is, or
 // kept in the private hand when the button came up over it (toHand).
-function dropHand(toHand = false): void {
+function dropHand(toHand = false, toPlayer: string | null = null): void {
   cancelLongPress();
   if (!dragging) return;
   dragging = false;
@@ -2241,9 +2396,13 @@ function dropHand(toHand = false): void {
     // are already here. The releases below take over `pending`: its answer is
     // then recognised like a late token of the stack, and put down on arrival.
     if (pending?.action === "acquire") stackRequests.add(pending.componentId);
+    // a group of cards goes into one pile together, edge cards included
+    const target = toHand ? null : groupTargetPile();
     // bottom first: each release brings its token above the others, so the
     // stack keeps its order
-    for (const counter of [...hand]) requestRelease(counter, toHand);
+    for (const counter of [...hand]) {
+      requestRelease(counter, toHand, target !== null && counter.isCard ? target : null, toPlayer);
+    }
     return;
   }
   // the answer to the acquire, to the pick, to the take or to the draw is
@@ -2535,13 +2694,30 @@ function onMouseUp(event: MouseEvent): void {
   // only releasing the right button ends the camera move
   if (event.button === MOUSE_RIGHT) panning = false;
   if (event.button === MOUSE_LEFT) {
-    // a card of the strip released on the area of the reader is shown there
-    if (armedHandItem !== null && overMyShowZone(event.clientX, event.clientY)) {
-      sendShow({ action: "show_add", component_id: armedHandItem.name });
+    const receiver = privateHandEnabled ? receiverAt(event.clientX, event.clientY) : null;
+    highlightReceiver(null);
+    // a token of the strip or of the area released on the name of a player
+    if (armedHandItem !== null && receiver !== null) {
+      requestGive(armedHandItem, receiver);
+      armedHandItem = null;
+    }
+    if (armedHandItem !== null) {
+      const shown = myShownIds().has(armedHandItem.name);
+      // a card of the strip released on the area of the reader is shown there
+      if (!shown && overMyShowZone(event.clientX, event.clientY)) {
+        sendShow({ action: "show_add", component_id: armedHandItem.name });
+      }
+      // a card of that area released on the strip is hidden there again
+      if (shown && overPrivateHand(event.clientX, event.clientY)) {
+        sendShow({ action: "show_remove", component_id: armedHandItem.name });
+      }
     }
     armedHandItem = null;
     armedDraw = null;
-    dropHand(overPrivateHand(event.clientX, event.clientY));
+    // a token carried on the table and released on the name of a player
+    // joins the hand of that player
+    if (receiver !== null) dropHand(true, receiver);
+    else dropHand(overPrivateHand(event.clientX, event.clientY));
     privateHand?.classList.remove("drop-target");
   }
 }
@@ -2550,7 +2726,20 @@ function onMouseUp(event: MouseEvent): void {
 // the private hand. The strip lights up while a release would keep the token.
 function onWindowMouseMove(event: MouseEvent): void {
   if (!privateHand) return;
-  const target = dragging && hand.length > 0 && overPrivateHand(event.clientX, event.clientY);
+  const carried =
+    (dragging && hand.length > 0) ||
+    // a card grabbed in the area of the reader, button still down
+    (armedHandItem !== null && (event.buttons & MOUSE_LEFT_MASK) !== 0 &&
+      myShownIds().has(armedHandItem.name));
+  const target = carried && overPrivateHand(event.clientX, event.clientY);
+  // a token carried from the table, the strip or the area lights the name
+  // of the player it would be given to
+  const carrying =
+    (dragging && hand.length > 0) ||
+    (armedHandItem !== null && (event.buttons & MOUSE_LEFT_MASK) !== 0);
+  highlightReceiver(
+    carrying && privateHandEnabled ? receiverAt(event.clientX, event.clientY) : null,
+  );
   privateHand.classList.toggle("drop-target", target);
 }
 
@@ -2839,7 +3028,9 @@ function draw(): void {
 
   // decks lie on the board like bags. A pile a held card hovers over is
   // outlined; only a player has buttons to click.
-  const targetedPiles = hand.map((counter) => pileUnder(decks, counter));
+  // A group of cards outlines the one pile it joins together.
+  const groupTarget = groupTargetPile();
+  const targetedPiles = groupTarget !== null ? [groupTarget.pile] : hand.map((counter) => pileUnder(decks, counter));
   drawDecks(ctx, targetedPiles, !isWatcher);
 
   // les fantômes de case d'origine passent sous les pions, pour que le pion
@@ -2992,6 +3183,8 @@ function handleServerMessage(raw: unknown): void {
       applyDeckEvent(data as unknown as DeckEvent);
     } else if (data.event === "deal") {
       applyDeal(data as unknown as DealEvent);
+    } else if (data.event === "give") {
+      applyGive(data as unknown as GiveEvent);
     } else if (data.event === "show") {
       applyShow(data as unknown as ShowEvent);
     } else if (data.event === "move") {

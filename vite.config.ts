@@ -21,5 +21,9 @@ export default defineConfig({
   },
   server: {
     port: 5173,
+    // resources shared by the OBG front ends live in OBG/Common, outside this repository
+    fs: {
+      allow: [".", resolve(import.meta.dirname, "../Common")],
+    },
   },
 });

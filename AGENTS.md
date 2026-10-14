@@ -221,6 +221,15 @@ Tourtoirac à chaque arrivée ou départ) : les
 sièges, puis les spectateurs. Couleurs dans `game.html` : joueur à la table en
 vert, joueur absent (`.absent`) en rouge, spectateur en bleu.
 
+Avec la main privée, chaque joueur de `#participants` a une icône de main de
+cartes avant son pseudo (`.hand-icon`, `Common/resources/hand_cards.svg`
+importé en `?raw` pour prendre la couleur du nom). Le pseudo d'un **autre**
+joueur (`li.hand-receiver`, `data-nickname`) reçoit un objet relâché dessus
+(`receiverAt`, allumé par `highlightReceiver` pendant le transport) : un
+pion tenu depuis la table part en `release` avec `hand: true` et `to_player`
+(`dropHand(true, receiver)`) ; un objet du bandeau ou de sa zone montrée part
+en `give` (`requestGive`), et l'événement `give` passe par `applyGive`.
+
 Montrer des cartes de sa main, seulement si
 `options.private_hand.show_hands_to_other_players` vaut `true`
 (`showHandsEnabled`) : `#show-hands-select`, à droite du bandeau, liste « All
@@ -233,7 +242,15 @@ jouerait la carte). Relâcher un objet du bandeau sur `#my-show-zone` envoie
 `show_close`. L'événement `show` (`applyShow`, `showsByOwner`) et
 `session.shows` disent ce que le lecteur lit ; les cartes montrées par le
 lecteur (`component_ids`) restent dans `myHand` mais sont retirées du bandeau
-(`myShownIds`). Un double-clic dans sa propre zone retourne la carte.
+(`myShownIds`). Un double-clic dans sa propre zone retourne la carte. Chaque
+carte d'une zone porte son rang (`numberedShowItem`), le même chez le
+propriétaire et chez ses lecteurs : c'est `ShowEvent.ranks`, donné par
+Tourtoirac quand la carte est montrée. Un rang ne change pas quand une autre
+carte sort de la zone, et n'est pas redonné ; il repart à 1 à la fermeture de
+la zone (`showRank` prend la position si `ranks` manque). Le propriétaire
+attrape une carte de sa zone comme une carte du bandeau (`armedHandItem`) :
+amenée sur la table, elle est jouée (`take`) ; relâchée sur le bandeau, elle
+y redevient cachée (`show_remove`, `onMouseUp`).
 
 Main privée, seulement si `options.private_hand` est un objet, même vide `{}`
 (`null` ou absent : pas de main ; `isPrivateHand`)
@@ -243,14 +260,19 @@ montre `myHand` (les pions que le lecteur garde hors de la table), chacun
 sur sa face courante (`counter.image`) : une carte entre en main face visible,
 et un double-clic sur un objet du bandeau le retourne (`requestHandFlip`,
 action `flip` ; le serveur ne répond qu'au détenteur, `applyFlip` redessine
-le bandeau). L'objet est rejoué sur la face qu'il montre dans le bandeau. Relâcher un pion au-dessus du bandeau envoie `release` avec
+le bandeau). L'icône `#flip-hand-button`, à gauche du bandeau, retourne
+d'un coup toutes les cartes qu'il montre (`requestHandFlipAll` : un `flip` par
+carte, les cartes montrées aux autres joueurs restent telles quelles) ; elle
+est grisée quand le bandeau n'a rien à retourner. Son image,
+`OBG/Common/resources/flip_hand.svg`, est importée par `game.ts` hors du dépôt
+(voir § Docker). L'objet est rejoué sur la face qu'il montre dans le bandeau. Relâcher un pion au-dessus du bandeau envoie `release` avec
 `hand: true` (`dropHand(toHand)`) ; presser un pion du bandeau puis amener le
 pointeur sur la table envoie `take` (`armedHandItem` → `requestTake`), et sa
 réponse est traitée par `applyPick`, comme un tirage dans un sac. Un simple
 clic ne joue rien. Le survol d'un objet du bandeau affiche son image en
 taille réelle (1:1, réduite seulement si la page est trop petite) au-dessus
 du pointeur (`#hand-zoom`, `showHandZoom`). `handsByNickname` (`hands` de la session et des événements
-`release` / `take`) donne le nombre affiché à côté de chaque pseudo et les dos
+`release` / `take` / `give`) donne le nombre affiché à côté de chaque pseudo et les dos
 montrés dans `#hand-preview` au survol du pseudo d'un autre joueur. Attention :
 `hand` désigne ailleurs dans `game.ts` les pions tenus à la souris.
 
@@ -345,6 +367,13 @@ statiques et démarre même si Chabanas ou Tourtoirac sont arrêtés. C'est
 Tourtoirac qui attend Chabanas avant d'accepter des connexions (voir
 `Tourtoirac/AGENTS.md` § Démarrage). Ne pas réintroduire de vérification de
 Chabanas ici : le navigateur ne lui parle jamais.
+
+`OBG/Common` (ressources partagées : icônes) est hors du dépôt : le build
+Docker le reçoit comme contexte nommé `common`
+(`docker build --build-context common=../Common`, `additional_contexts` dans le
+compose, `BUILD_CONTEXT` dans `OBG/deploy.sh`) et le copie en `/Common`, que
+`src/` atteint par `../../Common`. Sans ce contexte, le build échoue. En
+développement, `server.fs.allow` de `vite.config.ts` autorise ce dossier.
 
 `docker-compose.yml` : service `raffaillac`, port hôte `8080:80`. Le service
 `chabanas` y est commenté et à activer selon le déploiement.

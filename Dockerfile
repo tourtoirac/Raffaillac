@@ -10,6 +10,9 @@ COPY tsconfig.json vite.config.ts ./
 COPY index.html game.html ./
 COPY public ./public
 COPY src ./src
+# OBG/Common, outside this repository, given as the build context "common"
+# (docker build --build-context common=../Common): src/ reaches it as ../../Common
+COPY --from=common resources /Common/resources
 
 # Public path of the application ("/obg/" when served under a sub-path)
 ARG OBG_BASE=/

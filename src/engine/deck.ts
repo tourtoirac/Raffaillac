@@ -37,7 +37,7 @@ const AREA_STROKE = "rgba(0, 0, 0, 0.6)";
 
 // Buttons in the top-right corner of each pile: pressing one and moving away
 // draws that many cards at once.
-export const DRAW_COUNTS = [1, 5, 10] as const;
+export const DRAW_COUNTS = [2, 5, 10] as const;
 const DRAW_BUTTON_WIDTH = 28;
 const DRAW_BUTTON_HEIGHT = 20;
 const DRAW_BUTTON_GAP = 3;

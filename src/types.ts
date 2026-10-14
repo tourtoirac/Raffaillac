@@ -347,6 +347,9 @@ export interface ShowEvent {
   to: string | null;
   /** the cards as they are, on the side their owner left them */
   cards: HandBack[];
+  /** the rank of each card, given once when it is shown: it never changes
+   * while the area stays open (absent from an older Tourtoirac) */
+  ranks?: number[];
   /** the ids of those cards, for their owner only; empty for anybody else */
   component_ids: string[];
 }
@@ -514,6 +517,23 @@ export interface TakeEvent {
   /** the request_id of the take action, so a client recognises its own */
   request_id?: string | null;
   /** the token played, at the place the server put it */
+  component_json: TokenItem;
+}
+
+// a player gave a token of its private hand to another player, sent to the
+// whole session: it went from one hand to the other without crossing the table
+export interface GiveEvent {
+  event: "give";
+  /** id of the token */
+  component_id: string;
+  /** nickname of the player who gave it */
+  nickname: string;
+  /** nickname of the player whose hand took it */
+  to: string;
+  user: string;
+  /** what everybody sees of the private hands after this gift */
+  hands?: SessionHands;
+  /** the token; only its new holder reads the face of a card */
   component_json: TokenItem;
 }
 

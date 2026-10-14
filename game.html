@@ -180,6 +180,25 @@
     #participants li.drop-after {
       box-shadow: 0 2px 0 #6fcf6f;
     }
+    /* the private hand of a player, before its name (Common/resources) */
+    #participants .hand-icon {
+      display: inline-block;
+      width: 16px;
+      height: 16px;
+      margin-right: 5px;
+      vertical-align: -3px;
+    }
+    #participants .hand-icon svg {
+      width: 100%;
+      height: 100%;
+      display: block;
+    }
+    /* a carried token released on this name joins that hand */
+    #participants li.hand-receiver.drop-target {
+      background: #33402f;
+      outline: 1px solid #6fcf6f;
+      border-radius: 3px;
+    }
     /* how many tokens that player keeps in its private hand */
     #participants .hand-count {
       margin-left: 6px;
@@ -253,6 +272,25 @@
     #private-hand .hand-label {
       flex: none;
     }
+    /* icon from Common/resources, set by game.ts */
+    #flip-hand-button {
+      flex: none;
+      width: 44px;
+      height: 44px;
+      padding: 0;
+      border: 1px solid #3a3a3a;
+      border-radius: 6px;
+      background: #2f2f2f center / 36px 36px no-repeat;
+      cursor: pointer;
+    }
+    #flip-hand-button:hover:not(:disabled) {
+      background-color: #3d3d3d;
+      border-color: #6f6f6f;
+    }
+    #flip-hand-button:disabled {
+      opacity: 0.4;
+      cursor: default;
+    }
     #private-hand .hand-items,
     #private-hand-items {
       flex: 1;
@@ -323,6 +361,32 @@
       align-items: center;
       gap: 6px;
       overflow-x: auto;
+    }
+    /* the owner grabs a card of its area to play it or to hide it again */
+    .show-zone .hand-item.grabbable {
+      cursor: grab;
+    }
+    /* a shown card and its rank, read the same by the owner and its readers */
+    .show-zone .show-card {
+      position: relative;
+      flex: none;
+      display: flex;
+    }
+    .show-zone .show-rank {
+      position: absolute;
+      top: 3px;
+      left: 3px;
+      min-width: 20px;
+      height: 20px;
+      padding: 0 4px;
+      box-sizing: border-box;
+      border-radius: 10px;
+      background: rgba(0, 0, 0, 0.75);
+      border: 1px solid #ddd;
+      color: #fff;
+      font: bold 12px/18px sans-serif;
+      text-align: center;
+      pointer-events: none;
     }
     .show-zone .show-hint {
       color: #888;
@@ -411,6 +475,9 @@
   <!-- players only: what the reader keeps off the table. A token released
        here joins it, and one dragged from here to the table is played. -->
   <div id="private-hand" hidden>
+    <!-- turns over every card of the strip at once -->
+    <button id="flip-hand-button" type="button" title="Retourner toutes les cartes"
+            aria-label="Retourner toutes les cartes"></button>
     <span class="hand-label">Ma main</span>
     <div id="private-hand-items"></div>
     <!-- only when options.private_hand.show_hands_to_other_players is true -->
