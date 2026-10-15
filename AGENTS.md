@@ -50,6 +50,7 @@ prétendre avoir couvert une régression. La seule vérification possible est
 | `engine/bag.ts` `board.ts` `button.ts` `counter.ts` `counter_box.ts` `dice.ts` | Modèle et dessin des composants |
 | `engine/hex_grid.ts` | Grille hexagonale d'un plateau (`grid` du `game_json`) : même calcul que `Tourtoirac/Components/hex_grid.py` |
 | `ws/wsClient.ts` `wsWorker.ts` | WebSocket, exécuté dans un **SharedWorker** |
+| `voice.ts`         | Salon audio : WebRTC entre joueurs (`VoiceChat`), relayé par Tourtoirac |
 | `gameLock.ts`      | Une seule page de jeu par navigateur (Web Lock `obg_game`) |
 | `serverErrors.ts`  | Texte de l'erreur `invalid_component` (composant du `game_json` mal décrit), affiché par le lobby et la page de jeu |
 | `navigation.ts`    | URL `index.html` ↔ `game.html`, avec `?game=<nom>` pour garder l'onglet |
@@ -144,11 +145,12 @@ titre :
 | *Retournement local d'un plateau* | Retournement à 180° **local au joueur** (jamais envoyé au serveur). Seul un `board_group` `flippable` se retourne (`BoardGroup.flipped`), jamais un plateau seul. Un bouton par groupe ; le demi-tour se fait autour du centre de `flipArea(group)` (rectangle englobant), et tout ce qui est posé dans ce rectangle suit (`flippedGroupAt`, `displayTopLeft`) |
 | (après `applyRoll`) | Bouton « roll » d'un `dice_pool` (`rollPlates`, `placeRollButton`) : en pixels d'écran, posé juste au-dessus du rectangle englobant les dés, masqué pour un spectateur, assombri tant qu'un dé du groupe est dans son délai. `requestRollPool` envoie `roll_pool`, `applyRollPool` applique toutes les faces |
 | *Caméra*, *Défilement au bord* | `cameraX/Y`, `zoom`, `screenToWorld` / `worldToScreen`, défilement au bord de l'écran |
-| *Main* | `hand` (pions tenus), `pending` (requête `acquire`/`release` en vol, délai `RESPONSE_TIMEOUT`), `flushMoves`. **Glisser-déposer** : `dragging` vaut vrai tant que le bouton gauche tient la main ; elle ne suit le pointeur que dans ce cas. `releaseOnArrival` : le bouton est remonté avant la réponse à l'`acquire` ou au `pick`, le pion est reposé dès qu'il arrive. `grabbedName` / `grabWorld*` : le pion rattrape le pointeur à la réponse de l'`acquire`. **Appui long** (`LONG_PRESS_MS`, sans bouger de plus de `LONG_PRESS_SLACK` px) : `grabStack` demande tous les autres pions sous le point d'appui (`countersAt`), suivis dans `stackRequests` puisque `pending` ne suit qu'une requête ; `hand` reste triée dans l'ordre de dessin (`sortHand`) pour que la pile soit dessinée et reposée dans son ordre |
+| *Main* | `hand` (pions tenus), `pending` (requête `acquire`/`release` en vol, délai `RESPONSE_TIMEOUT`), `flushMoves`. **Glisser-déposer** : `dragging` vaut vrai tant que le bouton gauche tient la main ; elle ne suit le pointeur que dans ce cas. `releaseOnArrival` : le bouton est remonté avant la réponse à l'`acquire` ou au `pick`, le pion est reposé dès qu'il arrive. `grabbedName` / `grabWorld*` : le pion rattrape le pointeur à la réponse de l'`acquire`. **Appui long** (`LONG_PRESS_MS`, sans bouger de plus de `LONG_PRESS_SLACK` px) : `grabStack` demande tous les autres pions sous le point d'appui (`countersAt`), suivis dans `stackRequests` puisque `pending` ne suit qu'une requête ; `hand` reste triée dans l'ordre de dessin (`sortHand`) pour que la pile soit dessinée et reposée dans son ordre. Pendant le transport, `fanStack` décale chaque pion sous le pion du dessus (`handAnchor`) de `STACK_FAN_STEP` px par rang (`STACK_FAN_MAX` rangs au plus) : les `move` diffusent cet escalier. Au lâcher (`dropHand`), `fanStack(true)` recentre toute la pile sur le pion du dessus avant les `release` ; un pion de la pile acquis après le lâcher est reposé au même centre (`stackDrop`) |
 | *Main* (fin) | Sac : `requestPick` envoie `pick` (avec un `request_id`), `applyPick` remet le pion tiré dans `counters` et, pour celui qui a cliqué, dans `hand`, sous le pointeur ; `putInBag` retire de la table un pion relâché sur un sac (`release` avec `bag_id`) |
 | *Souris* | `onMouseDown` / `Move` / `Up` : **bouton gauche** = clic sur une zone de rotation, de compteur ou de dé → `request*` ; bouton gauche **enfoncé** sur un pion → `requestAcquire` (sur un sac → `requestPick`), déplacement tant qu'il reste enfoncé, bouton **relâché** → `dropHand` → `requestRelease` (`mouseup` écouté aussi sur `window`). Une main restée pleine sans bouton enfoncé (session reprise) est reprise par le prochain appui ; **bouton droit enfoncé** = déplacement de la caméra (seul moyen, menu contextuel désactivé sur le canvas) ; bouton central ignoré |
 | *Hex grid* | Aperçu de l'hexagone visé par un pion tenu (`predictedHex`, miroir de `Session.snap_to_grid`), grille de calibrage affichée par la touche **G** avec la position du pointeur relative au plateau |
 | *Dessin* | `draw()` : plateaux, compteurs, sacs (avec le nombre de pions restants), dés, pions, boutons, infobulles |
+| *Stack preview* | `drawStackPreview` : fenêtre en pixels d'écran ouverte au survol d'au moins deux pions superposés (`countersAt`), qui les montre dans l'ordre de la pile (voir aussi `revealsFront`, § Nationalités). `drawStackCount` y ajoute, à cheval sur le bord haut à droite, une pastille avec le nombre de pions de la pile (même aspect que `.hand-count` de `game.html`) |
 | *Messages du serveur Tourtoirac* | `handleServerMessage` : une branche `if/else` par `event` → fonctions `apply*` |
 | *Mise en place du jeu* | `allComponentsLoaded`, `maybeRequestSetup`, `applySetup`, `handleSessionEvent` |
 | *Loading overlay* | Voile `#loading-overlay` de `game.html` par-dessus le canvas : `componentImages` (liste unique des images attendues, aussi utilisée par `allComponentsLoaded`), `updateLoadingOverlay` appelé à chaque frame jusqu'à ce que la session soit reçue, les images chargées et le setup appliqué (attente du setup plafonnée à `SETUP_WAIT_MS`). Premier chargement seulement |
@@ -220,6 +222,22 @@ d'une partie non close déplace le nom d'un joueur par glisser-déposer HTML5
 Tourtoirac à chaque arrivée ou départ) : les
 sièges, puis les spectateurs. Couleurs dans `game.html` : joueur à la table en
 vert, joueur absent (`.absent`) en rouge, spectateur en bleu.
+
+Salon audio (`voice.ts`, section *Voice channel* de `game.ts`) : en haut de
+`#participants`, `#voice-controls` (masqué pour un spectateur et une partie
+close) porte « Rejoindre l'audio » / « Quitter l'audio » et le bouton du micro.
+`VoiceChat.join` ouvre le micro (`getUserMedia`, **contexte sécurisé
+obligatoire** : https ou localhost, sinon bouton désactivé) puis envoie
+`voice_join` ; `voice_joined` → `onJoined` appelle chaque `peers` (offre
+WebRTC) ; `voice_signal` → `onSignal` (offre, réponse, candidats mis en
+attente tant que la description distante manque) ; `voice_members` →
+`setMembers` raccroche ceux qui sont partis. Couper le micro désactive la
+piste locale, sans renégociation ; le serveur n'en sait rien. Un point devant
+le pseudo marque un joueur du salon, allumé quand il parle (analyseur Web
+Audio, `SPEAKING_LEVEL`) ; `refreshVoiceDots` les allume sur place sans
+reconstruire la liste. À chaque `session_joined` (reconnexion), `rejoin`
+renvoie `voice_join` : la nouvelle connexion est hors du salon. `pagehide`
+envoie `voice_leave`. Les `voice_signal` ne sont pas journalisés.
 
 Avec la main privée, chaque joueur de `#participants` a une icône de main de
 cartes avant son pseudo (`.hand-icon`, `Common/resources/hand_cards.svg`
@@ -335,6 +353,13 @@ affichée dans le bandeau après le pseudo) ; le lobby l'affiche après chaque
 pseudo. `Counter.nationality` reprend celle du pion (`TokenItem.nationality`),
 `Session.player_nationalities` celle de chaque siège : c'est là que viendront
 se brancher les règles.
+
+`block_sight` (`TokenItem.block_sight`, `Counter.blockSight`) : dans l'aperçu
+de pile, un pion qui le porte masque les pions situés sous lui aux spectateurs
+et aux joueurs d'une autre nationalité que la sienne (`blocksSightOf`). Ils les
+voient avec la face du pion bloquant, le plus haut de la pile qui les concerne
+(`sightBlockers`) ; les pions de leur propre nationalité restent visibles. Ce
+n'est qu'un rendu : le serveur envoie toujours tous les pions.
 
 ### Ajouter un type de composant
 

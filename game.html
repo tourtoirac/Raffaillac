@@ -180,6 +180,55 @@
     #participants li.drop-after {
       box-shadow: 0 2px 0 #6fcf6f;
     }
+    /* the voice channel, at the top of the participants panel */
+    #voice-controls {
+      display: flex;
+      flex-direction: column;
+      gap: 4px;
+      margin-bottom: 8px;
+      padding-bottom: 8px;
+      border-bottom: 1px solid #3a3a3a;
+    }
+    #voice-controls[hidden] {
+      display: none;
+    }
+    #voice-controls button {
+      padding: 4px 6px;
+      background: #3a3a3a;
+      border: 1px solid #666;
+      border-radius: 4px;
+      color: #eee;
+      font-size: 12px;
+      cursor: pointer;
+    }
+    #voice-controls button[hidden] {
+      display: none;
+    }
+    #voice-controls button:disabled {
+      opacity: 0.5;
+      cursor: default;
+    }
+    #voice-join-button.active {
+      border-color: #6fcf6f;
+    }
+    #voice-mute-button.muted {
+      background: #5a2d2d;
+      border-color: #ff8a80;
+    }
+    /* a player in the voice channel; lit while it speaks */
+    #participants .voice-dot {
+      display: inline-block;
+      width: 8px;
+      height: 8px;
+      margin-right: 5px;
+      border-radius: 50%;
+      background: #666;
+      vertical-align: 1px;
+    }
+    #participants .voice-dot.speaking {
+      background: #6fcf6f;
+      box-shadow: 0 0 6px 2px rgba(111, 207, 111, 0.8);
+    }
     /* the private hand of a player, before its name (Common/resources) */
     #participants .hand-icon {
       display: inline-block;
@@ -462,6 +511,11 @@
     <div id="show-zones"></div>
     <!-- filled from the participants the server sends at each arrival or departure -->
     <aside id="participants" aria-label="Joueurs et spectateurs" hidden>
+      <!-- players only: the voice channel of the game (src/voice.ts) -->
+      <div id="voice-controls" hidden>
+        <button id="voice-join-button" type="button">Rejoindre l'audio</button>
+        <button id="voice-mute-button" type="button" hidden>Micro ouvert</button>
+      </div>
       <ul id="participants-list"></ul>
     </aside>
     <!-- shown until every image is loaded and the initial setup is applied -->

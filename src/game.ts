@@ -34,6 +34,7 @@ import { Dice } from "./engine/dice";
 import type { DicePool } from "./engine/dice";
 // shared with the other OBG front ends: OBG/Common/resources
 import flipHandIcon from "../../Common/resources/flip_hand.svg";
+import { VoiceChat } from "./voice";
 // inlined as markup: drawn in currentColor, it takes the color of the name
 import handCardsIcon from "../../Common/resources/hand_cards.svg?raw";
 import { lobbyReturnUrl, originGameName } from "./navigation";
@@ -51,6 +52,9 @@ import type {
   DealEvent,
   ShowEvent,
   GiveEvent,
+  VoiceJoinedEvent,
+  VoiceMembersEvent,
+  VoiceSignalEvent,
   DeckEvent,
   DeckItem,
   DiceItem,
@@ -105,6 +109,12 @@ const ROLL_BUTTON_GAP = 4;
 const STACK_PREVIEW_OFFSET = 50;
 const STACK_PREVIEW_PADDING = 10;
 const STACK_PREVIEW_GAP = 10;
+// Badge holding the number of counters of the stack, drawn across the top
+// right corner of the popup. Same look as `.hand-count` in game.html.
+const STACK_COUNT_FONT = "12px sans-serif";
+const STACK_COUNT_HEIGHT = 18;
+const STACK_COUNT_PADDING = 6;
+const STACK_COUNT_INSET = 12;
 
 // ---------------------------------------------
 // Défilement de la caméra au bord de l'écran
@@ -272,6 +282,14 @@ function renderParticipants(): void {
         icon.innerHTML = handCardsIcon;
         line.append(icon);
       }
+      // in the voice channel: a dot, lit while that player speaks
+      if (voice.members.includes(entry.nickname)) {
+        const dot = document.createElement("span");
+        dot.className = "voice-dot";
+        if (voice.speaking.has(entry.nickname)) dot.classList.add("speaking");
+        dot.title = "Dans le salon audio";
+        line.append(dot);
+      }
       line.append(entry.nickname);
       line.title = entry.nickname;
       line.dataset.nickname = entry.nickname;
@@ -308,6 +326,87 @@ function renderParticipants(): void {
 }
 
 if (participantsPanel) participantsPanel.addEventListener("mouseleave", hideHandPreview);
+
+// -------------------------------------------------
+// Voice channel
+// -------------------------------------------------
+// The players of the game talk to each other (src/voice.ts): the buttons are
+// at the top of the participants panel, a watcher has none.
+
+const voiceControls = document.getElementById("voice-controls");
+const voiceJoinButton = document.getElementById("voice-join-button") as HTMLButtonElement | null;
+const voiceMuteButton = document.getElementById("voice-mute-button") as HTMLButtonElement | null;
+
+const voice = new VoiceChat(
+  {
+    send: (message) => {
+      const socket = getSocket();
+      if (!socket) return;
+      socket.send(message);
+      // offers and candidates are many and long: not logged
+      if (message.action !== "voice_signal") console.log("[WS] Envoyé :", JSON.stringify(message));
+    },
+    onChange: () => {
+      refreshVoiceDots();
+      updateVoiceControls();
+    },
+  },
+  () => loadPlayerIdentity()?.name,
+);
+
+// Who speaks changes several times a second: the dots are lit in place, and
+// the list is only rebuilt when somebody enters or leaves the channel (a
+// rebuild would break the drag of a name by the owner).
+function refreshVoiceDots(): void {
+  if (!participantsList) return;
+  const dots = [...participantsList.querySelectorAll<HTMLElement>("li[data-nickname] .voice-dot")];
+  const shown = dots.map((dot) => dot.closest<HTMLElement>("li")?.dataset.nickname ?? "");
+  const sameMembers =
+    shown.length === voice.members.length && shown.every((name) => voice.members.includes(name));
+  if (!sameMembers) {
+    renderParticipants();
+    return;
+  }
+  dots.forEach((dot, index) => dot.classList.toggle("speaking", voice.speaking.has(shown[index])));
+}
+
+function updateVoiceControls(): void {
+  if (!voiceControls || !voiceJoinButton || !voiceMuteButton) return;
+  voiceControls.hidden = isWatcher || isClosed;
+  voiceJoinButton.textContent = voice.joined ? "Quitter l'audio" : "Rejoindre l'audio";
+  voiceJoinButton.classList.toggle("active", voice.joined);
+  voiceMuteButton.hidden = !voice.joined;
+  voiceMuteButton.textContent = voice.muted ? "Micro coupé" : "Micro ouvert";
+  voiceMuteButton.classList.toggle("muted", voice.muted);
+  if (!VoiceChat.available()) {
+    voiceJoinButton.disabled = true;
+    voiceJoinButton.title = "Le micro n'est accessible qu'en https (ou sur localhost)";
+  }
+}
+
+voiceJoinButton?.addEventListener("click", () => {
+  if (voice.joined) {
+    voice.leave();
+    return;
+  }
+  voiceJoinButton.disabled = true;
+  voice
+    .join()
+    .catch((error: unknown) => {
+      console.warn("[voice] Micro indisponible :", error);
+      window.alert(
+        "Impossible d'accéder au micro. Vérifiez qu'un micro est branché et que " +
+          "le navigateur a le droit de l'utiliser pour ce site.",
+      );
+    })
+    .finally(() => {
+      voiceJoinButton.disabled = false;
+      updateVoiceControls();
+    });
+});
+voiceMuteButton?.addEventListener("click", () => voice.toggleMute());
+// the other players hang up at once, without waiting for the connection to drop
+window.addEventListener("pagehide", () => voice.leave());
 
 // The other player whose name is under the pointer, when a token released
 // there would join its private hand; null anywhere else.
@@ -909,6 +1008,8 @@ function loadComponents(components: SessionComponents | undefined): void {
 
   hand = [];
   handAnchor = null;
+  stackFan = false;
+  stackDrop = null;
   hoveredCounter = null;
   hoveredCounterBox = null;
   clearPending();
@@ -963,6 +1064,7 @@ function createCounter(token: TokenItem): Counter {
   // commence sur sa case de départ
   if (typeof token.in_place === "boolean") counter.inPlace = token.in_place;
   counter.nationality = token.nationality ?? null;
+  counter.blockSight = token.block_sight === true;
   counter.isCard = token.kind === "card";
   return counter;
 }
@@ -1575,6 +1677,8 @@ function stepEdgeScroll(dt: number): void {
     counter.x = lx;
     counter.y = ly;
   }
+  // a carried stack keeps its fanned shape
+  fanStack();
   handWorldX = lx;
   handWorldY = ly;
   movesDirty = true;
@@ -1652,6 +1756,37 @@ function clearMultiDraw(): void {
 const stackRequests = new Set<string>();
 let stackRequestsTimer: ReturnType<typeof setTimeout> | null = null;
 
+// A stack taken by a long press is drawn fanned out while it is carried, each
+// token a little lower and to the right of the one above it, so that it looks
+// like a pile. It is put down gathered again, every token centered on the top
+// one (the anchor of the hand).
+const STACK_FAN_STEP = 4;
+// beyond this depth, the lower tokens stay under the last visible step
+const STACK_FAN_MAX = 8;
+let stackFan = false;
+// center of the top token when the stack was put down: a token of the stack
+// whose acquire is answered after the button came up (one of ids) is put down
+// there too
+let stackDrop: { x: number; y: number; ids: Set<string> } | null = null;
+
+// Places every token of a carried stack relative to the top one: depth 0 is
+// the anchor, then one step per token below it. gathered puts them all on the
+// anchor, as they are put down.
+function fanStack(gathered = false): void {
+  const anchor = handAnchor;
+  if (!stackFan || anchor === null || !hand.includes(anchor)) return;
+  const centerX = anchor.x + anchor.width / 2;
+  const centerY = anchor.y + anchor.height / 2;
+  // the hand is sorted bottom first: the last tokens are the highest
+  const others = hand.filter((counter) => counter !== anchor);
+  others.forEach((counter, index) => {
+    const depth = gathered ? 0 : Math.min(others.length - index, STACK_FAN_MAX);
+    counter.x = centerX - counter.width / 2 + depth * STACK_FAN_STEP;
+    counter.y = centerY - counter.height / 2 + depth * STACK_FAN_STEP;
+  });
+  movesDirty = true;
+}
+
 function cancelLongPress(): void {
   if (longPressTimer !== null) {
     clearTimeout(longPressTimer);
@@ -1687,6 +1822,8 @@ function grabStack(): void {
       canAcquire(counter),
   );
   if (stack.length === 0) return;
+  stackFan = true;
+  stackDrop = null;
 
   for (const counter of stack) {
     stackRequests.add(counter.name);
@@ -1700,6 +1837,7 @@ function grabStack(): void {
   stackRequestsTimer = setTimeout(() => {
     stackRequests.clear();
     stackRequestsTimer = null;
+    stackDrop = null;
   }, RESPONSE_TIMEOUT);
 }
 
@@ -1815,13 +1953,19 @@ function applyHandEvent(answer: HandEvent, isOwnRequest: boolean, fromStack = fa
       // a token of a long press: the token the button went down on stays the
       // anchor of the hand
       if (!dragging) {
-        // the button is already up: the token goes straight back down
+        // the button is already up: the token goes straight back down, on
+        // the rest of the stack when it was put down already
+        if (stackDrop?.ids.has(counter.name)) {
+          counter.x = stackDrop.x - counter.width / 2;
+          counter.y = stackDrop.y - counter.height / 2;
+        }
         requestRelease(counter);
       } else {
         // the stack follows the token that left first
         counter.x += lastMouseWorldX - grabWorldX;
         counter.y += lastMouseWorldY - grabWorldY;
         movesDirty = true;
+        fanStack();
       }
     } else {
       handAnchor = counter;
@@ -1834,6 +1978,8 @@ function applyHandEvent(answer: HandEvent, isOwnRequest: boolean, fromStack = fa
         counter.x += lastMouseWorldX - grabWorldX;
         counter.y += lastMouseWorldY - grabWorldY;
         movesDirty = true;
+        // tokens of the stack may have arrived before the top one
+        fanStack();
       }
       grabbedName = null;
     }
@@ -1842,6 +1988,7 @@ function applyHandEvent(answer: HandEvent, isOwnRequest: boolean, fromStack = fa
     if (index >= 0) hand.splice(index, 1);
     counter.held = false;
     if (handAnchor === counter) handAnchor = hand[0] ?? null;
+    if (hand.length === 0) stackFan = false;
 
     // pas de recalage ici : il a été fait avant l'envoi du release, et
     // applyComponentState a posé la position renvoyée par le serveur
@@ -2396,6 +2543,15 @@ function dropHand(toHand = false, toPlayer: string | null = null): void {
     // are already here. The releases below take over `pending`: its answer is
     // then recognised like a late token of the stack, and put down on arrival.
     if (pending?.action === "acquire") stackRequests.add(pending.componentId);
+    // a carried stack is put down gathered on its top token
+    if (stackFan && handAnchor !== null && hand.includes(handAnchor)) {
+      fanStack(true);
+      stackDrop = {
+        x: handAnchor.x + handAnchor.width / 2,
+        y: handAnchor.y + handAnchor.height / 2,
+        ids: new Set(stackRequests),
+      };
+    }
     // a group of cards goes into one pile together, edge cards included
     const target = toHand ? null : groupTargetPile();
     // bottom first: each release brings its token above the others, so the
@@ -2782,6 +2938,30 @@ function revealsFront(counter: Counter): boolean {
   );
 }
 
+// A counter with block_sight hides what lies under it from the watchers and
+// from the players of another nationality.
+function blocksSightOf(counter: Counter): boolean {
+  return counter.blockSight && (isWatcher || counter.nationality !== myNationality);
+}
+
+/**
+ * For each counter of a stack (bottom first), the counter blocking the sight
+ * of this player on it, or null when it is seen. Every counter under the
+ * highest counter that blocks the sight is masked by that one, except those
+ * of this player's own nationality: a player always knows their own counters.
+ */
+function sightBlockers(stack: Counter[]): (Counter | null)[] {
+  const masks: (Counter | null)[] = stack.map(() => null);
+  let blocker: Counter | null = null;
+  for (let index = stack.length - 1; index >= 0; index--) {
+    const counter = stack[index];
+    const own = !isWatcher && counter.nationality !== null && counter.nationality === myNationality;
+    if (blocker !== null && !own) masks[index] = blocker;
+    if (blocker === null && blocksSightOf(counter)) blocker = counter;
+  }
+  return masks;
+}
+
 /**
  * Draws, in screen space, a popup about the counters under the pointer.
  *
@@ -2792,6 +2972,9 @@ function revealsFront(counter: Counter): boolean {
  *
  * A single counter gets a popup only when its front may be looked at: the
  * popup then holds that front alone.
+ *
+ * A counter whose sight is blocked (sightBlockers) is shown with the face of
+ * the counter blocking it.
  */
 function drawStackPreview(): void {
   // while dragging, the held counters are the ones under the pointer
@@ -2799,7 +2982,9 @@ function drawStackPreview(): void {
 
   const [wx, wy] = screenToWorld(pointerScreenX, pointerScreenY);
   const [lx, ly] = flipPoint(wx, wy);
-  const stack = countersAt(lx, ly).filter((counter) => counter.image.complete);
+  const under = countersAt(lx, ly);
+  const stack = under.filter((counter) => counter.image.complete);
+  const masks = sightBlockers(stack);
   const showCounters = stack.length >= 2;
   if (!showCounters && !stack.some(revealsFront)) return;
 
@@ -2866,7 +3051,9 @@ function drawStackPreview(): void {
         cellHeight + STACK_PREVIEW_GAP,
       );
     }
-    line.counters.forEach((counter, column) => {
+    line.counters.forEach((seen, column) => {
+      // a counter out of sight is drawn as the counter blocking it
+      const counter = masks[stack.indexOf(seen)] ?? seen;
       // a front line keeps each front under its counter: the other cells stay empty
       if (line.fronts && !revealsFront(counter)) return;
       const cellX = popupX + STACK_PREVIEW_PADDING + column * (cellWidth + STACK_PREVIEW_GAP);
@@ -2889,6 +3076,42 @@ function drawStackPreview(): void {
     });
   });
 
+  ctx.restore();
+
+  // the counters still loading are counted too: they are on the table
+  if (showCounters) drawStackCount(under.length, popupX + popupWidth, popupY);
+}
+
+/**
+ * Draws, in screen space, the badge holding the number of counters of a
+ * stack, its right end STACK_COUNT_INSET px left of (right, top) and centered
+ * on that line, so that it sits across the top border of the popup.
+ */
+function drawStackCount(count: number, right: number, top: number): void {
+  ctx.save();
+  ctx.setTransform(1, 0, 0, 1, 0, 0);
+  ctx.font = STACK_COUNT_FONT;
+  const text = String(count);
+  const width = Math.max(
+    STACK_COUNT_HEIGHT,
+    ctx.measureText(text).width + 2 * STACK_COUNT_PADDING,
+  );
+  const x = right - STACK_COUNT_INSET - width;
+  const y = top - STACK_COUNT_HEIGHT / 2;
+
+  ctx.beginPath();
+  ctx.roundRect(x, y, width, STACK_COUNT_HEIGHT, STACK_COUNT_HEIGHT / 2);
+  // opaque, so the popup border does not cross the number
+  ctx.fillStyle = "#1e1e1e";
+  ctx.fill();
+  ctx.lineWidth = 1;
+  ctx.strokeStyle = "#ffd700";
+  ctx.stroke();
+
+  ctx.fillStyle = "#ffd700";
+  ctx.textAlign = "center";
+  ctx.textBaseline = "middle";
+  ctx.fillText(text, x + width / 2, top);
   ctx.restore();
 }
 
@@ -3151,7 +3374,8 @@ function handleServerMessage(raw: unknown): void {
   const data = raw as GameServerMessage;
   if (!data || typeof data !== "object") return;
 
-  console.log("[WS] Message reçu :", JSON.stringify(data));
+  // the WebRTC messages relayed between players are many and long: not logged
+  if (data.event !== "voice_signal") console.log("[WS] Message reçu :", JSON.stringify(data));
 
   try {
     if (data.event === "acquire" || data.event === "release") {
@@ -3183,6 +3407,13 @@ function handleServerMessage(raw: unknown): void {
       applyDeckEvent(data as unknown as DeckEvent);
     } else if (data.event === "deal") {
       applyDeal(data as unknown as DealEvent);
+    } else if (data.event === "voice_joined") {
+      voice.onJoined(data as unknown as VoiceJoinedEvent);
+    } else if (data.event === "voice_members") {
+      voice.setMembers((data as unknown as VoiceMembersEvent).members);
+    } else if (data.event === "voice_signal") {
+      const signal = data as unknown as VoiceSignalEvent;
+      void voice.onSignal(signal.from, signal.data);
     } else if (data.event === "give") {
       applyGive(data as unknown as GiveEvent);
     } else if (data.event === "show") {
@@ -3550,6 +3781,11 @@ function handleSessionEvent(data: GameServerMessage): void {
   if (Array.isArray(session.missing_players)) missingPlayers = session.missing_players;
   updateParticipants(session.participants);
   updateLeaveLinks();
+  // a session joined again after a reconnection: the server knows a new
+  // connection, outside the voice channel, and the reader calls back
+  voice.setMembers(session.voice);
+  voice.rejoin();
+  updateVoiceControls();
 
   currentSession = session;
   storeSession(session);
@@ -3612,6 +3848,9 @@ function applySessionClosed(): void {
   isClosed = true;
   isWatcher = true;
   isOwner = false;
+  // nobody talks over a closed game
+  voice.leave();
+  updateVoiceControls();
   // une requête en vol attendait une réponse qui ne viendra plus
   clearPending();
   updateLeaveLinks();

@@ -72,6 +72,11 @@ export interface TokenItem {
   side?: "front" | "back";
   /** the side the token belongs to, among the nationalities of the game */
   nationality?: string | null;
+  /**
+   * in the stack preview, hides the tokens under this one from the players of
+   * another nationality and from the watchers
+   */
+  block_sight?: boolean;
   /** null as long as the token waits inside a bag */
   x: number | null;
   y: number | null;
@@ -314,6 +319,36 @@ export interface Session {
   hand?: TokenItem[];
   /** the cards the players show of their hand, as far as the reader may read them */
   shows?: ShowEvent[];
+  /** the nicknames of the players in the voice channel (absent from an older Tourtoirac) */
+  voice?: string[];
+}
+
+/** what the browsers of two players tell each other to set up a call (WebRTC) */
+export interface VoiceSignalData {
+  description?: RTCSessionDescriptionInit;
+  candidate?: RTCIceCandidateInit;
+}
+
+// the answer to voice_join, sent to the newcomer alone
+export interface VoiceJoinedEvent {
+  event: "voice_joined";
+  /** the players already in the channel: the newcomer calls each of them */
+  peers: string[];
+  /** the STUN / TURN servers to cross the NATs with */
+  ice_servers: RTCIceServer[];
+}
+
+// who is in the voice channel, sent to the whole session at each change
+export interface VoiceMembersEvent {
+  event: "voice_members";
+  members: string[];
+}
+
+// a WebRTC message of another player, relayed by the server
+export interface VoiceSignalEvent {
+  event: "voice_signal";
+  from: string;
+  data: VoiceSignalData;
 }
 
 /**

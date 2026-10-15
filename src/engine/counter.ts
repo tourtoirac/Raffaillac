@@ -70,6 +70,11 @@ export class Counter {
   side: CounterSide;
   /** the side the token belongs to, among the nationalities of the game */
   nationality: string | null = null;
+  /**
+   * in the stack preview, the players of another nationality and the watchers
+   * see the counters under this one with its face instead of their own
+   */
+  blockSight = false;
   /** a card is handled like a token, and is the only thing a deck accepts */
   isCard = false;
 
