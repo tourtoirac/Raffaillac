@@ -52,6 +52,16 @@ export interface HexGridItem {
   size_y?: number;
   /** no snap beyond this distance from the center; absent means no limit */
   snap_radius?: number;
+  /** the part of the board the hexes are printed on; absent means the whole board */
+  area?: HexGridArea | null;
+}
+
+/** A rectangle of a board, relative to its top-left corner. */
+export interface HexGridArea {
+  x: number;
+  y: number;
+  width: number;
+  height: number;
 }
 
 export interface TokenItem {
@@ -232,13 +242,68 @@ export interface DeckItem {
   height: number;
   /** caption written above the deck; absent, null or empty, nothing is written */
   text?: string | null;
+  /**
+   * the multi-draw buttons of each pile, one per number of cards, as the
+   * server cleaned them from the game_json: empty, no button. Absent from an
+   * older Tourtoirac: the default buttons.
+   */
+  card_pickup_quantity?: number[];
+  /**
+   * angle the piles are turned by around their center: 0, 90, 180 or 270.
+   * Absent from an older Tourtoirac: upright.
+   */
+  orientation?: number;
+  /**
+   * a stack only: whether it shows the Deal button. Absent from a deck, and
+   * from an older Tourtoirac: no button.
+   */
+  deal?: boolean;
+  /**
+   * whether the piles show their Shuffle button; only false hides it.
+   * Absent from an older Tourtoirac: shown.
+   */
+  display_shuffle?: boolean;
   /** a single deck only has the draw pile */
   piles: Partial<Record<DeckPileName, DeckPileItem>>;
 }
 
+/** A column of boxes of an mw_character, under its icon. */
+export interface MwCharacterColumnItem {
+  /** the picture on top of the column, never clicked; null, none */
+  icon: string | null;
+  /** how many boxes, from 3 to 6 */
+  boxes: number;
+  /** the state of each box: left 0 empty, 1 slash, 2 cross; right 0 empty, 1 circle */
+  marks: number[];
+}
+
+/**
+ * An mw_character: a card that never moves, with a column of boxes on each
+ * side. A click on a box marks it, a double click turns the card over; the
+ * columns only show on its front.
+ */
+export interface MwCharacterItem {
+  kind: "mw_character";
+  id: string;
+  x: number;
+  y: number;
+  width: number;
+  height: number;
+  front_src: string;
+  back_src: string | null;
+  side: "front" | "back";
+  /** only the players of this nationality mark it and turn it over */
+  nationality: string | null;
+  /** absent when the game declares no usable column on that side */
+  left?: MwCharacterColumnItem;
+  right?: MwCharacterColumnItem;
+  /** the cards under it, face up, the last one put at the end; absent from an older Tourtoirac */
+  cards?: TokenItem[];
+}
+
 export interface SessionComponents {
-  // a board, a counter, a dice pool, a bag, a deck, a stack: whatever does not move with the tokens
-  fixed: (BoardItem | BoardGroupItem | CounterItem | DicePoolItem | BagItem | DeckItem)[];
+  // a board, a counter, a dice pool, a bag, a deck, a stack, an mw_character: whatever does not move with the tokens
+  fixed: (BoardItem | BoardGroupItem | CounterItem | DicePoolItem | BagItem | DeckItem | MwCharacterItem)[];
   movable: TokenItem[];
   // absent d'un Tourtoirac plus ancien : le dé est donc facultatif
   dice?: DiceItem[];
@@ -430,6 +495,8 @@ export interface SessionPlayer {
 
 export interface GameVariantInfo {
   name: string;
+  /** what the lobby shows; absent from an older Chabanas: the name is shown */
+  display_name?: string;
   min_players?: number;
   max_players?: number;
   max_watchers?: number;
@@ -442,6 +509,8 @@ export type GameType = "Boardgame" | "Wargame";
 
 export interface GameInfo {
   name: string;
+  /** what the lobby shows; absent from an older Chabanas: the name is shown */
+  display_name?: string;
   /** absent from an older Chabanas: the game is then filed as a wargame */
   type?: GameType;
   variant?: Record<string, GameVariantInfo>;
@@ -533,6 +602,10 @@ export interface ReleaseEvent extends HandEventBase {
   deck_id?: string | null;
   /** that deck after the release */
   deck_json?: DeckItem | null;
+  /** the mw_character the card went under; null or absent when it did not */
+  character_id?: string | null;
+  /** that character after the release */
+  character_json?: MwCharacterItem | null;
   /** nickname of the player whose private hand took the token; null or absent otherwise */
   hand_of?: string | null;
   /** what everybody sees of the private hands after this release */
@@ -583,6 +656,8 @@ export interface PickEvent {
   request_id?: string | null;
   /** the token picked, at the place the server put it */
   component_json: TokenItem;
+  /** a card taken from under an mw_character: that character without it */
+  character_json?: MwCharacterItem | null;
 }
 
 // a player took the top card of a pile of a deck, sent to the whole session:
@@ -658,6 +733,8 @@ export interface ComponentState {
   /** the faces the server lets this client know; null for one kept back */
   front_src?: string | null;
   back_src?: string | null;
+  /** angle of a token, in degrees: a randomizer of the setup may give one */
+  orientation?: number;
 }
 
 // le joueur a remis le rectangle vert sur tous les jetons
@@ -669,7 +746,12 @@ export interface FixPositionsEvent {
 // le setup du jeu vient d'être appliqué : chaque écran replace ses composants
 export interface SetupEvent {
   event: "setup";
-  components: ComponentState[];
+  /**
+   * the components the setup touched, in their final state. A token or a
+   * card a randomizer took out of a bag or a deck comes with its whole
+   * description, and that bag or deck follows, described again.
+   */
+  components: (ComponentState | TokenItem | DeckItem | BagItem)[];
 }
 
 // un compteur a été incrémenté ou décrémenté : le serveur renvoie la valeur
@@ -678,6 +760,16 @@ export interface CounterValueEvent {
   event: "counter_value";
   component_id: string;
   value: number;
+}
+
+// a box of an mw_character changed: sent to every screen
+export interface MarkEvent {
+  event: "mark";
+  component_id: string;
+  column: "left" | "right";
+  index: number;
+  value: number;
+  nickname: string;
 }
 
 // nouvelle position d'un composant, reçue des autres joueurs de la session

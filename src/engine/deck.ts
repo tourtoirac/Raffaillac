@@ -27,6 +27,9 @@ const BUTTON_FILL = "#3a7";
 // A button that would do nothing right now, like a deal without enough cards.
 const BUTTON_DISABLED_FILL = "#999";
 const BUTTON_FONT_MAX = 14;
+// Width of the buttons of a pile turned by a quarter turn: they stand in a
+// column on its right, where a turned pile usually has more room than below.
+const SIDE_BUTTON_WIDTH = 90;
 // Caption written above the deck when the game gives it a text.
 const TEXT_SIZE = 16;
 const TEXT_GAP = 6;
@@ -36,8 +39,9 @@ const AREA_FILL = "rgba(0, 0, 0, 0.12)";
 const AREA_STROKE = "rgba(0, 0, 0, 0.6)";
 
 // Buttons in the top-right corner of each pile: pressing one and moving away
-// draws that many cards at once.
-export const DRAW_COUNTS = [2, 5, 10] as const;
+// draws that many cards at once. The game chooses them (card_pickup_quantity);
+// these are the ones of a server that does not say.
+const DEFAULT_DRAW_COUNTS: readonly number[] = [2, 5, 10];
 const DRAW_BUTTON_WIDTH = 28;
 const DRAW_BUTTON_HEIGHT = 20;
 const DRAW_BUTTON_GAP = 3;
@@ -88,6 +92,18 @@ export interface Deck {
   readonly height: number;
   /** caption written above the deck, or null when the game gives none */
   readonly text: string | null;
+  /** how many cards each multi-draw button takes; empty, no button */
+  readonly drawCounts: readonly number[];
+  /**
+   * angle the piles are turned by around their center, in degrees: 0, 90,
+   * 180 or 270. x, y, width and height are those of the pile before it is
+   * turned; pileFootprint gives the rectangle it covers.
+   */
+  readonly orientation: number;
+  /** a stack showing the Deal button: the game declares "deal": true */
+  readonly deals: boolean;
+  /** the piles show their Shuffle button: hidden only by "display_shuffle": false */
+  readonly displayShuffle: boolean;
   piles: DeckPile[];
 }
 
@@ -157,8 +173,46 @@ export function createDeck(item: DeckItem): Deck {
     width: item.width,
     height: item.height,
     text: typeof item.text === "string" && item.text !== "" ? item.text : null,
+    drawCounts: readDrawCounts(item.card_pickup_quantity),
+    orientation: readOrientation(item.orientation),
+    deals: item.kind === "stack" && item.deal === true,
+    displayShuffle: item.display_shuffle !== false,
     piles: readPiles(item),
   };
+}
+
+// Mirrors read_deck_orientation on the server: a quarter turn, or upright.
+function readOrientation(value: unknown): number {
+  if (typeof value !== "number" || !Number.isFinite(value)) return 0;
+  const angle = ((Math.trunc(value) % 360) + 360) % 360;
+  return angle % 90 === 0 ? angle : 0;
+}
+
+export interface Rect {
+  readonly x: number;
+  readonly y: number;
+  readonly width: number;
+  readonly height: number;
+}
+
+/**
+ * The rectangle a pile covers once turned: a quarter turn swaps its width
+ * and height around the same center. Mirrors Deck.footprint on the server.
+ */
+export function pileFootprint(deck: Deck, pile: DeckPile): Rect {
+  const quarter = deck.orientation === 90 || deck.orientation === 270;
+  const width = quarter ? deck.height : deck.width;
+  const height = quarter ? deck.width : deck.height;
+  const centerX = pile.x + deck.width / 2;
+  const centerY = pile.y + deck.height / 2;
+  return { x: centerX - width / 2, y: centerY - height / 2, width, height };
+}
+
+// The server sends the buttons already cleaned; the client only guards
+// against what it could not draw.
+function readDrawCounts(value: unknown): readonly number[] {
+  if (!Array.isArray(value)) return DEFAULT_DRAW_COUNTS;
+  return value.filter((count): count is number => Number.isInteger(count) && count >= 1);
 }
 
 // The server describes the deck again each time a card moves or a pile is
@@ -176,7 +230,8 @@ export function pileAt(decks: Deck[], x: number, y: number): { deck: Deck; pile:
   for (let i = decks.length - 1; i >= 0; i -= 1) {
     const deck = decks[i];
     for (const pile of deck.piles) {
-      if (inside(x, y, pile.x, pile.y, deck.width, deck.height)) return { deck, pile };
+      const area = pileFootprint(deck, pile);
+      if (inside(x, y, area.x, area.y, area.width, area.height)) return { deck, pile };
     }
   }
   return null;
@@ -190,52 +245,66 @@ export function pileUnder(decks: Deck[], counter: Counter): DeckPile | null {
 }
 
 /**
- * The buttons of a deck, one row each under their pile.
+ * The buttons of a deck, one row each under their pile, or beside it when
+ * the deck is turned by a quarter turn.
  * @param dealTo the number of players a stack would deal to, or null when
- *   the game has no private hand: a stack then has no Deal button
+ *   the game has no private hand: a stack then has no Deal button, nor
+ *   when it does not declare "deal": true
  */
 export function deckButtons(deck: Deck, dealTo: number | null): DeckButton[] {
   return deck.piles.flatMap((pile) => {
-    const entries = PILE_ACTIONS[pile.name].map((entry) => ({ ...entry, enabled: true }));
-    if (deck.isStack && dealTo !== null) {
+    const entries = PILE_ACTIONS[pile.name]
+      .filter((entry) => entry.action !== "shuffle" || deck.displayShuffle)
+      .map((entry) => ({ ...entry, enabled: true }));
+    if (deck.isStack && deck.deals && dealTo !== null) {
       // a deal gives one card to each player, or none at all
       entries.push({ action: "deal", label: "Deal", enabled: dealTo > 0 && pile.count >= dealTo });
     }
+    // the buttons stay upright: under the pile as it lies on the table, or in
+    // a column on its right when it is turned by a quarter turn
+    const area = pileFootprint(deck, pile);
+    const beside = deck.orientation === 90 || deck.orientation === 270;
     return entries.map((entry, row) => ({
       deck,
       pile,
       action: entry.action,
       label: entry.label,
       enabled: entry.enabled,
-      x: pile.x,
-      y: pile.y + deck.height + BUTTON_GAP + row * (BUTTON_HEIGHT + BUTTON_GAP),
-      width: deck.width,
+      x: beside ? area.x + area.width + BUTTON_GAP : area.x,
+      y: beside
+        ? area.y + row * (BUTTON_HEIGHT + BUTTON_GAP)
+        : area.y + area.height + BUTTON_GAP + row * (BUTTON_HEIGHT + BUTTON_GAP),
+      width: beside ? SIDE_BUTTON_WIDTH : area.width,
       height: BUTTON_HEIGHT,
     }));
   });
 }
 
 // The draw buttons of a deck: one row in the top-right corner of each pile,
-// narrowed when the pile is too small for three buttons of full width.
+// narrowed when the pile is too small for all of them at full width.
 export function drawButtons(deck: Deck): DrawButton[] {
-  const room = deck.width - 2 * DRAW_BUTTON_MARGIN - (DRAW_COUNTS.length - 1) * DRAW_BUTTON_GAP;
-  const width = Math.max(4, Math.min(DRAW_BUTTON_WIDTH, room / DRAW_COUNTS.length));
-  const height = Math.min(DRAW_BUTTON_HEIGHT, deck.height / 3);
-  return deck.piles.flatMap((pile) =>
-    DRAW_COUNTS.map((count, column) => ({
+  const counts = deck.drawCounts;
+  if (counts.length === 0) return [];
+  return deck.piles.flatMap((pile) => {
+    // upright, in the top-right corner of the pile as it lies on the table
+    const area = pileFootprint(deck, pile);
+    const room = area.width - 2 * DRAW_BUTTON_MARGIN - (counts.length - 1) * DRAW_BUTTON_GAP;
+    const width = Math.max(4, Math.min(DRAW_BUTTON_WIDTH, room / counts.length));
+    const height = Math.min(DRAW_BUTTON_HEIGHT, area.height / 3);
+    return counts.map((count, column) => ({
       deck,
       pile,
       count,
       enabled: pile.count >= count,
       // the last button ends at the right margin of the pile
       x:
-        pile.x + deck.width - DRAW_BUTTON_MARGIN - width -
-        (DRAW_COUNTS.length - 1 - column) * (width + DRAW_BUTTON_GAP),
-      y: pile.y + DRAW_BUTTON_MARGIN,
+        area.x + area.width - DRAW_BUTTON_MARGIN - width -
+        (counts.length - 1 - column) * (width + DRAW_BUTTON_GAP),
+      y: area.y + DRAW_BUTTON_MARGIN,
       width,
       height,
-    })),
-  );
+    }));
+  });
 }
 
 export function drawButtonAt(decks: Deck[], x: number, y: number): DrawButton | null {
@@ -323,6 +392,12 @@ export function drawPile(
   const { x, y } = pile;
   const { width, height } = deck;
   ctx.save();
+  // the cards are drawn turned around the center of the pile
+  if (deck.orientation !== 0) {
+    ctx.translate(x + width / 2, y + height / 2);
+    ctx.rotate((deck.orientation * Math.PI) / 180);
+    ctx.translate(-(x + width / 2), -(y + height / 2));
+  }
 
   if (deck.isStack) {
     drawStackCards(ctx, deck, pile);
@@ -362,10 +437,14 @@ export function drawPile(
     ctx.strokeStyle = TARGET_COLOR;
     ctx.strokeRect(x, y, width, height);
   }
+  ctx.restore();
+  ctx.save();
 
+  // the badge stays upright, in the bottom-right corner of the turned pile
+  const area = pileFootprint(deck, pile);
   const size = Math.max(BADGE_MIN_SIZE, Math.min(BADGE_MAX_SIZE, Math.min(width, height) * BADGE_RATIO));
-  const centerX = x + width - size / 2;
-  const centerY = y + height - size / 2;
+  const centerX = area.x + area.width - size / 2;
+  const centerY = area.y + area.height - size / 2;
   ctx.beginPath();
   ctx.arc(centerX, centerY, size / 2, 0, Math.PI * 2);
   // an empty pile reads at a glance: its badge turns gray
@@ -412,8 +491,10 @@ export function drawDeckText(ctx: CanvasRenderingContext2D, deck: Deck): void {
   ctx.lineWidth = 3;
   ctx.strokeStyle = "white";
   ctx.fillStyle = "black";
-  // the white outline keeps the caption readable on any board
-  ctx.strokeText(deck.text, pile.x, pile.y - TEXT_GAP);
-  ctx.fillText(deck.text, pile.x, pile.y - TEXT_GAP);
+  // the white outline keeps the caption readable on any board; it stays
+  // upright, above the pile as it lies on the table
+  const area = pileFootprint(deck, pile);
+  ctx.strokeText(deck.text, area.x, area.y - TEXT_GAP);
+  ctx.fillText(deck.text, area.x, area.y - TEXT_GAP);
   ctx.restore();
 }

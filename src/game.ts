@@ -6,6 +6,7 @@ import {
   deckButtons,
   drawButtonAt,
   drawButtons,
+  pileFootprint,
   drawDeckButton,
   drawDrawButton,
   drawDeckText,
@@ -31,6 +32,15 @@ import {
 } from "./engine/counter_box";
 import type { CounterAction, CounterBox } from "./engine/counter_box";
 import { Dice } from "./engine/dice";
+import {
+  boxAt,
+  createMwCharacter,
+  drawMwCharacter,
+  hitMwCharacter,
+  isFlippable,
+  readCharacterCards,
+} from "./engine/mw_character";
+import type { MwCharacter } from "./engine/mw_character";
 import type { DicePool } from "./engine/dice";
 // shared with the other OBG front ends: OBG/Common/resources
 import flipHandIcon from "../../Common/resources/flip_hand.svg";
@@ -49,6 +59,8 @@ import type {
   ComponentState,
   CounterItem,
   CounterValueEvent,
+  MarkEvent,
+  MwCharacterItem,
   DealEvent,
   ShowEvent,
   GiveEvent,
@@ -115,6 +127,9 @@ const STACK_COUNT_FONT = "12px sans-serif";
 const STACK_COUNT_HEIGHT = 18;
 const STACK_COUNT_PADDING = 6;
 const STACK_COUNT_INSET = 12;
+// Character preview: the fronts of the cards under an mw_character, at this
+// height on screen whatever the zoom, so that they can be read
+const CHARACTER_PREVIEW_CARD_HEIGHT = 220;
 
 // ---------------------------------------------
 // Défilement de la caméra au bord de l'écran
@@ -892,6 +907,11 @@ const countersById = new Map<string, Counter>();
 let counterBoxes: CounterBox[] = [];
 const counterBoxesById = new Map<string, CounterBox>();
 
+// mw_character components are "fixed" cards with two columns of boxes: a
+// click marks a box, a double click turns the card over
+let mwCharacters: MwCharacter[] = [];
+const mwCharactersById = new Map<string, MwCharacter>();
+
 // un dé se lance d'un clic : ni prenable ni déplaçable
 let dices: Dice[] = [];
 const dicesById = new Map<string, Dice>();
@@ -949,6 +969,14 @@ function loadComponents(components: SessionComponents | undefined): void {
     .map((item) => createCounterBox(item as CounterItem));
   for (const box of counterBoxes) {
     counterBoxesById.set(box.name, box);
+  }
+
+  mwCharactersById.clear();
+  mwCharacters = (components?.fixed ?? [])
+    .filter((item) => item.kind === "mw_character")
+    .map((item) => createMwCharacter(item as MwCharacterItem));
+  for (const character of mwCharacters) {
+    mwCharactersById.set(character.name, character);
   }
 
   countersById.clear();
@@ -1734,6 +1762,14 @@ let armedDraw: DrawButton | null = null;
 let armedDrawScreenX = 0;
 let armedDrawScreenY = 0;
 
+// The mw_character the left button went down on, while cards lie under it,
+// and where on screen. Its last card is only asked for once the pointer moves
+// away with the button still down: a click, or a double click that turns the
+// character over, takes nothing.
+let armedCharacter: MwCharacter | null = null;
+let armedCharacterScreenX = 0;
+let armedCharacterScreenY = 0;
+
 // The request of a draw of several cards: one event answers for each card,
 // while `pending` only waits for the first.
 let multiDrawId: string | null = null;
@@ -1921,12 +1957,18 @@ function applyHandEvent(answer: HandEvent, isOwnRequest: boolean, fromStack = fa
       if (kept) counter.setFaces(kept.front_src, kept.back_src);
       // a card joins a hand face up, whatever side it showed on the table
       if (kept?.side !== undefined) counter.setSide(kept.side);
+      // and upright, whatever angle it had on the table
+      if (typeof kept?.orientation === "number") counter.orientation = kept.orientation;
       // the token went to the private hand of a player: it leaves the table
       putInPrivateHand(counter, release.hand_of);
     } else if (release.deck_id) {
       // the card went on top of a pile of a deck: it leaves the table
       putInBag(counter, undefined);
       refreshDeck(release.deck_json);
+    } else if (release.character_id) {
+      // the card went under an mw_character: it leaves the table
+      putInBag(counter, undefined);
+      refreshCharacter(release.character_json);
     } else if (release.bag_id) {
       // the token fell into a bag: it leaves the table
       putInBag(counter, bagsById.get(release.bag_id));
@@ -2177,6 +2219,7 @@ function applyPick(message: PickEvent | TakeEvent | DrawEvent): void {
   if (laterCard && drawIndex >= (message as DrawEvent).count! - 1) clearMultiDraw();
   if (message.event === "take") setHands(message.hands);
   if (message.event === "draw") refreshDeck(message.deck_json);
+  if (message.event === "pick") refreshCharacter(message.character_json);
 
   const state = message.component_json;
   if (!state) return;
@@ -2203,6 +2246,8 @@ function applyPick(message: PickEvent | TakeEvent | DrawEvent): void {
   counter.initialY = state.initial_y ?? null;
   counter.setFaces(state.front_src, state.back_src);
   if (state.side !== undefined) counter.setSide(state.side);
+  // a card drawn comes out upright (orientation 0 from the server)
+  if (typeof state.orientation === "number") counter.orientation = state.orientation;
   if (!counters.includes(counter)) counters.push(counter);
 
   if (isOwnRequest) {
@@ -2316,6 +2361,73 @@ function applyCounterValue(message: CounterValueEvent): void {
   box.value = message.value;
 }
 
+// Mirrors refuse_modification for an mw_character: only the players of its
+// nationality mark it or turn it over, once the game is on.
+// Returns true when the action must not be sent; the player is told why.
+function characterRefused(character: MwCharacter): boolean {
+  if (character.nationality !== null && character.nationality !== myNationality) {
+    counterInfoText = showComponentId
+      ? `${character.name}  réservé à ${character.nationality}`
+      : `Carte réservée à ${character.nationality}`;
+    return true;
+  }
+  if (!isStarted) {
+    warnGameNotStarted();
+    return true;
+  }
+  if (missingPlayers.length > 0) {
+    warnPlayersMissing();
+    return true;
+  }
+  return false;
+}
+
+// The client only says which box was clicked: the server moves it on to its
+// next state and tells every screen.
+function requestMark(character: MwCharacter, column: "left" | "right", index: number): void {
+  if (characterRefused(character)) return;
+  const socket = getSocket();
+  if (!socket) return;
+  const message = { action: "mark", component_id: character.name, column, index };
+  socket.send(message);
+  console.log("[WS] Envoyé :", JSON.stringify(message));
+}
+
+function applyMark(message: MarkEvent): void {
+  const column = mwCharactersById.get(message.component_id)?.columns[message.column];
+  if (!column || message.index < 0 || message.index >= column.boxes) return;
+  column.marks[message.index] = message.value;
+}
+
+// The server described a character again: a card went under it or left it.
+function refreshCharacter(item: MwCharacterItem | null | undefined): void {
+  if (!item) return;
+  const character = mwCharactersById.get(item.id);
+  if (character !== undefined) character.cards = readCharacterCards(item.cards);
+}
+
+// The last card put under a character comes out under the pointer, in the
+// hand of this player, like a token picked from a bag.
+function requestCharacterPick(character: MwCharacter, x: number, y: number): void {
+  if (character.cards.length === 0 || characterRefused(character)) return;
+  const socket = getSocket();
+  if (!socket) return;
+  const requestId = `${Date.now()}-${Math.random().toString(36).slice(2)}`;
+  const message = { action: "pick", component_id: character.name, x, y, request_id: requestId };
+  setPending("pick", character.name, requestId);
+  socket.send(message);
+  console.log("[WS] Envoyé :", JSON.stringify(message));
+}
+
+function requestCharacterFlip(character: MwCharacter): void {
+  if (!isFlippable(character) || characterRefused(character)) return;
+  const socket = getSocket();
+  if (!socket) return;
+  const message = { action: "flip", component_id: character.name };
+  socket.send(message);
+  console.log("[WS] Envoyé :", JSON.stringify(message));
+}
+
 function requestRotate(counter: Counter, direction: RotationDirection): void {
   if (modificationRefused(counter)) return;
   const socket = getSocket();
@@ -2421,6 +2533,12 @@ function applyGive(message: GiveEvent): void {
 
 // le pion s'est retourné : appliqué par tous les écrans, comme la rotation
 function applyFlip(message: FlipEvent): void {
+  // an mw_character turned over: its columns only show on its front
+  const character = mwCharactersById.get(message.component_id);
+  if (character !== undefined) {
+    character.side = message.side;
+    return;
+  }
   const counter = countersById.get(message.component_id);
   if (!counter) return;
   // the face now shown may be one the server had kept back until this flip
@@ -2661,6 +2779,17 @@ function onMouseDown(event: MouseEvent): void {
       }
     }
 
+    // click on a box of an mw_character: it is marked. Like the + and - of a
+    // counter, the boxes come before a token lying over them.
+    if (hand.length === 0) {
+      const character = hitMwCharacter(mwCharacters, lx, ly);
+      const box = character === null ? null : boxAt(character, lx, ly);
+      if (character !== null && box !== null) {
+        requestMark(character, box.column, box.index);
+        return;
+      }
+    }
+
     // click on a button of a deck: shuffle, refill or deal. Like the + and -
     // of a counter, the buttons come before a token lying over them.
     if (hand.length === 0) {
@@ -2715,6 +2844,16 @@ function onMouseDown(event: MouseEvent): void {
       releaseOnArrival = false;
       grabbedName = null;
       requestPick(clickedBag, lx, ly);
+      return;
+    }
+
+    // button down on an mw_character with cards under it: the last one comes
+    // out once the pointer moves away with the button still down
+    const pressedCharacter = hitMwCharacter(mwCharacters, lx, ly);
+    if (pressedCharacter !== null && pressedCharacter.cards.length > 0) {
+      armedCharacter = pressedCharacter;
+      armedCharacterScreenX = sx;
+      armedCharacterScreenY = sy;
       return;
     }
 
@@ -2813,6 +2952,21 @@ function onMouseMove(event: MouseEvent): void {
     }
   }
 
+  if (armedCharacter !== null) {
+    if ((event.buttons & MOUSE_LEFT_MASK) === 0) {
+      armedCharacter = null;
+    } else if (Math.hypot(sx - armedCharacterScreenX, sy - armedCharacterScreenY) > LONG_PRESS_SLACK) {
+      const character = armedCharacter;
+      armedCharacter = null;
+      if (pending === null && hand.length === 0) {
+        dragging = true;
+        releaseOnArrival = false;
+        grabbedName = null;
+        requestCharacterPick(character, lx, ly);
+      }
+    }
+  }
+
   // the pointer left the press point: this is a drag, not a long press
   if (
     longPressTimer !== null &&
@@ -2870,6 +3024,7 @@ function onMouseUp(event: MouseEvent): void {
     }
     armedHandItem = null;
     armedDraw = null;
+    armedCharacter = null;
     // a token carried on the table and released on the name of a player
     // joins the hand of that player
     if (receiver !== null) dropHand(true, receiver);
@@ -2976,6 +3131,61 @@ function sightBlockers(stack: Counter[]): (Counter | null)[] {
  * A counter whose sight is blocked (sightBlockers) is shown with the face of
  * the counter blocking it.
  */
+/**
+ * Draws, in screen space, a popup with the front of every card lying under
+ * the mw_character under the pointer, the one a drag takes first on the left.
+ * A token lying on the character keeps the stack preview instead.
+ */
+function drawCharacterPreview(): void {
+  if (!pointerOnCanvas || panning || hand.length > 0) return;
+  const [wx, wy] = screenToWorld(pointerScreenX, pointerScreenY);
+  const [lx, ly] = flipPoint(wx, wy);
+  if (countersAt(lx, ly).length > 0) return;
+  const character = hitMwCharacter(mwCharacters, lx, ly);
+  if (character === null || character.cards.length === 0) return;
+
+  const cards = [...character.cards].reverse();
+  const cellHeight = CHARACTER_PREVIEW_CARD_HEIGHT;
+  const widths = cards.map((card) => (card.width / card.height) * cellHeight);
+  const cellWidth = Math.max(...widths);
+
+  // as many columns as fit beside the pointer, wrapping to new rows otherwise
+  const roomRight = canvas.width - pointerScreenX - STACK_PREVIEW_OFFSET;
+  const roomLeft = pointerScreenX - STACK_PREVIEW_OFFSET;
+  const room = Math.max(roomRight, roomLeft) - 2 * STACK_PREVIEW_PADDING;
+  const maxColumns = Math.max(1, Math.floor((room + STACK_PREVIEW_GAP) / (cellWidth + STACK_PREVIEW_GAP)));
+  const columns = Math.min(cards.length, maxColumns);
+  const rows = Math.ceil(cards.length / columns);
+  const popupWidth = columns * cellWidth + (columns - 1) * STACK_PREVIEW_GAP + 2 * STACK_PREVIEW_PADDING;
+  const popupHeight = rows * cellHeight + (rows - 1) * STACK_PREVIEW_GAP + 2 * STACK_PREVIEW_PADDING;
+
+  let popupX = pointerScreenX + STACK_PREVIEW_OFFSET;
+  if (popupX + popupWidth > canvas.width && roomLeft > roomRight) {
+    popupX = pointerScreenX - STACK_PREVIEW_OFFSET - popupWidth;
+  }
+  let popupY = pointerScreenY - popupHeight / 2;
+  popupY = Math.max(0, Math.min(canvas.height - popupHeight, popupY));
+
+  ctx.save();
+  ctx.setTransform(1, 0, 0, 1, 0, 0);
+  ctx.fillStyle = "rgba(30, 30, 30, 0.92)";
+  ctx.fillRect(popupX, popupY, popupWidth, popupHeight);
+  ctx.lineWidth = 2;
+  ctx.strokeStyle = "#ffd700";
+  ctx.strokeRect(popupX, popupY, popupWidth, popupHeight);
+  cards.forEach((card, index) => {
+    const column = index % columns;
+    const row = Math.floor(index / columns);
+    const cellX = popupX + STACK_PREVIEW_PADDING + column * (cellWidth + STACK_PREVIEW_GAP);
+    const cellY = popupY + STACK_PREVIEW_PADDING + row * (cellHeight + STACK_PREVIEW_GAP);
+    const width = widths[index];
+    if (card.front.complete && card.front.naturalWidth > 0) {
+      ctx.drawImage(card.front, cellX + (cellWidth - width) / 2, cellY, width, cellHeight);
+    }
+  });
+  ctx.restore();
+}
+
 function drawStackPreview(): void {
   // while dragging, the held counters are the ones under the pointer
   if (!pointerOnCanvas || panning || hand.length > 0) return;
@@ -3183,7 +3393,13 @@ function onDoubleClick(event: MouseEvent): void {
   // qui se trouve dessous
   const held = hand.find((counter) => counter.contains(lx, ly));
   const hit = held ?? hitCounter(lx, ly);
-  if (hit === null) return;
+  if (hit === null) {
+    // no token there: an mw_character under the pointer turns over, unless
+    // the double click was on one of its boxes
+    const character = hitMwCharacter(mwCharacters, lx, ly);
+    if (character !== null && boxAt(character, lx, ly) === null) requestCharacterFlip(character);
+    return;
+  }
 
   requestFlip(hit);
 }
@@ -3237,6 +3453,13 @@ function draw(): void {
   for (const box of counterBoxes) {
     drawAtDisplay(ctx, box.x, box.y, box.width, box.height, () => {
       drawCounterBox(ctx, box);
+    });
+  }
+
+  // the mw_character cards lie on the board, under the tokens
+  for (const character of mwCharacters) {
+    drawAtDisplay(ctx, character.x, character.y, character.width, character.height, () => {
+      drawMwCharacter(ctx, character);
     });
   }
 
@@ -3346,6 +3569,7 @@ function draw(): void {
 
   // above the game and the flip buttons, below the info bar
   drawStackPreview();
+  drawCharacterPreview();
 
   // barre d'info (écran) : nom + position du pion
   if (counterInfoText) {
@@ -3430,6 +3654,8 @@ function handleServerMessage(raw: unknown): void {
       applyFlip(data as unknown as FlipEvent);
     } else if (data.event === "counter_value") {
       applyCounterValue(data as unknown as CounterValueEvent);
+    } else if (data.event === "mark") {
+      applyMark(data as unknown as MarkEvent);
     } else if (data.event === "fix_positions") {
       applyFixPositions(data as unknown as FixPositionsEvent);
     } else if (data.event === "setup") {
@@ -3617,6 +3843,14 @@ function componentImages(): HTMLImageElement[] {
     if (bag.image !== null) images.push(bag.image);
     for (const counter of bag.content) images.push(counter.image);
   }
+  // an mw_character: its two faces and the icons of its columns
+  for (const character of mwCharacters) {
+    images.push(character.front);
+    if (character.back !== null) images.push(character.back);
+    for (const column of Object.values(character.columns)) {
+      if (column.icon !== null) images.push(column.icon);
+    }
+  }
   return images;
 }
 
@@ -3709,8 +3943,21 @@ function maybeRequestSetup(): void {
 function applySetup(message: SetupEvent): void {
   let boardMoved = false;
 
-  for (const state of message.components ?? []) {
-    if (typeof state.x !== "number" || typeof state.y !== "number") continue;
+  for (const item of message.components ?? []) {
+    // a deck a randomizer took cards from: its piles are read again
+    if (decksById.has(item.id)) {
+      refreshDeck(item as DeckItem);
+      continue;
+    }
+
+    const state = item as ComponentState;
+    if (typeof state.x !== "number" || typeof state.y !== "number") {
+      // a card a randomizer put on a deck or a stack leaves the table: the
+      // deck itself is read again from its own entry
+      const left = countersById.get(state.id);
+      if (left !== undefined && counters.includes(left)) putInBag(left, undefined);
+      continue;
+    }
 
     const board = boards.find((candidate) => candidate.name === state.id);
     if (board !== undefined) {
@@ -3720,8 +3967,20 @@ function applySetup(message: SetupEvent): void {
       continue;
     }
 
-    const token = countersById.get(state.id);
+    let token = countersById.get(state.id);
+    if (token === undefined && "kind" in item && (item.kind === "token" || item.kind === "card")) {
+      // a card a randomizer took out of a deck: this screen never had it
+      token = createCounter(item as TokenItem);
+      countersById.set(token.name, token);
+    }
     if (token !== undefined) {
+      // a token a randomizer took out of a bag lies on the table from now on
+      const placed = token;
+      for (const bag of bags) {
+        bag.content = bag.content.filter((candidate) => candidate !== placed);
+      }
+      if (!counters.includes(placed)) counters.push(placed);
+      if (typeof state.orientation === "number") token.orientation = state.orientation;
       token.x = state.x;
       token.y = state.y;
       // la case de depart suit le setup : c'est la que revient le pion et la
@@ -3740,6 +3999,14 @@ function applySetup(message: SetupEvent): void {
     if (box !== undefined) {
       box.x = state.x;
       box.y = state.y;
+      continue;
+    }
+
+    const character = mwCharactersById.get(state.id);
+    if (character !== undefined) {
+      character.x = state.x;
+      character.y = state.y;
+      if (state.side === "front" || state.side === "back") character.side = state.side;
       continue;
     }
 
@@ -4007,6 +4274,7 @@ function componentsBounds(): WorldRect | null {
     add(board.x, board.y, width, height);
   }
   for (const box of counterBoxes) add(box.x, box.y, box.width, box.height);
+  for (const character of mwCharacters) add(character.x, character.y, character.width, character.height);
   for (const bag of bags) add(bag.x, bag.y, bag.width, bag.height);
   for (const dice of dices) add(dice.x, dice.y, dice.width, dice.height);
   for (const counter of counters) {
@@ -4044,7 +4312,8 @@ function drawDecks(
 ): void {
   for (const deck of decks) {
     for (const pile of deck.piles) {
-      drawAtDisplay(context, pile.x, pile.y, deck.width, deck.height, () => {
+      const area = pileFootprint(deck, pile);
+      drawAtDisplay(context, area.x, area.y, area.width, area.height, () => {
         drawPile(context, deck, pile, targetedPiles.includes(pile));
       });
     }
@@ -4062,7 +4331,8 @@ function drawDecks(
     }
     const first = deck.piles[0];
     if (first !== undefined) {
-      drawAtDisplay(context, first.x, first.y, deck.width, deck.height, () => {
+      const area = pileFootprint(deck, first);
+      drawAtDisplay(context, area.x, area.y, area.width, area.height, () => {
         drawDeckText(context, deck);
       });
     }
@@ -4076,6 +4346,11 @@ function drawComponents(context: CanvasRenderingContext2D): void {
   for (const box of counterBoxes) {
     drawAtDisplay(context, box.x, box.y, box.width, box.height, () => {
       drawCounterBox(context, box);
+    });
+  }
+  for (const character of mwCharacters) {
+    drawAtDisplay(context, character.x, character.y, character.width, character.height, () => {
+      drawMwCharacter(context, character);
     });
   }
   for (const bag of bags) {

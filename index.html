@@ -15,6 +15,20 @@
       color: #333;
     }
 
+    /* link to the user guide, top right of the page */
+    #help-link {
+      position: absolute;
+      top: 20px;
+      right: 20px;
+      color: #007bff;
+      font-size: 0.95em;
+      text-decoration: none;
+    }
+
+    #help-link:hover {
+      text-decoration: underline;
+    }
+
     #status {
       padding: 10px;
       border: 1px solid #ccc;
@@ -410,8 +424,11 @@
 </head>
 <body>
   <h1>Online Boardgames</h1>
+  <!-- relative path: public/guide_lobby.pdf is served under the public path of the build -->
+  <a id="help-link" href="guide_lobby.pdf" target="_blank" rel="noopener" title="Guide du lobby (PDF)">Aide (PDF)</a>
 
-  <div id="status-container">
+  <!-- log of the server messages: hidden, lobby.ts shows it on localhost only -->
+  <div id="status-container" hidden>
     <div id="status">Chargement de la configuration...</div>
   </div>
 

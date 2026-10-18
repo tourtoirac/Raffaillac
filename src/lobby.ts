@@ -25,6 +25,13 @@ interface ServerMessage {
 }
 
 const statusElement = document.getElementById("status") as HTMLDivElement;
+
+// The log of the server messages is a development aid: it is only shown when
+// the page is served from this machine, never to the players of a deployed
+// site.
+const LOCAL_HOSTNAMES = ["localhost", "127.0.0.1", "[::1]"];
+(document.getElementById("status-container") as HTMLDivElement).hidden =
+  !LOCAL_HOSTNAMES.includes(window.location.hostname);
 const typeTabsContainer = document.getElementById("type-tabs") as HTMLDivElement;
 const tabsContainer = document.getElementById("tabs-container") as HTMLDivElement;
 const tablesContainer = document.getElementById("tables-container") as HTMLDivElement;
@@ -665,7 +672,8 @@ function renderAll(): void {
 
     const btn = document.createElement("button");
     btn.className = "tab-button" + (index === activeIndex ? " active" : "");
-    btn.textContent = name.charAt(0).toUpperCase() + name.slice(1);
+    // the name stays the identifier sent to Chabanas: only the label changes
+    btn.textContent = game?.display_name || name.charAt(0).toUpperCase() + name.slice(1);
     btn.onclick = () => switchTab(btn, index, name);
     tabsContainer.appendChild(btn);
 
@@ -773,7 +781,7 @@ function renderAll(): void {
       const dropdownContent = dropdown.querySelector(".create-dropdown-content") as HTMLDivElement;
       for (const vKey of variantKeys) {
         const a = document.createElement("a");
-        a.textContent = variants[vKey].name;
+        a.textContent = variants[vKey].display_name || variants[vKey].name;
         a.onclick = (e) => {
           e.stopPropagation();
           dropdownContent.classList.remove("show");

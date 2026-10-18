@@ -1,4 +1,4 @@
-import type { HexGridItem } from "../types";
+import type { HexGridArea, HexGridItem } from "../types";
 
 // Hex grid laid over a board. Tourtoirac snaps a released token onto the
 // nearest hex center (Components/hex_grid.py): the client only previews the
@@ -17,10 +17,23 @@ export interface HexGrid {
   sizeY: number;
   /** no snap beyond this distance from the center; null means no limit */
   snapRadius: number | null;
+  /** where the hexes are printed, relative to the board; null for the whole board */
+  area: { left: number; top: number; right: number; bottom: number } | null;
 }
 
 function readNumber(value: unknown): number | null {
   return typeof value === "number" && Number.isFinite(value) ? value : null;
+}
+
+// the area of a grid, or null when malformed, as read_area on the server
+function readArea(item: HexGridArea): HexGrid["area"] {
+  if (!item || typeof item !== "object") return null;
+  const x = readNumber(item.x);
+  const y = readNumber(item.y);
+  const width = readNumber(item.width);
+  const height = readNumber(item.height);
+  if (x === null || y === null || width === null || height === null || width <= 0 || height <= 0) return null;
+  return { left: x, top: y, right: x + width, bottom: y + height };
 }
 
 /** The grid of a board, or null when absent or malformed, as on the server. */
@@ -36,6 +49,12 @@ export function readHexGrid(item: HexGridItem | null | undefined): HexGrid | nul
   const sizeY = readNumber(item.size_y);
   if (sizeY !== null && sizeY <= 0) return null;
   const radius = readNumber(item.snap_radius);
+  let area: HexGrid["area"] = null;
+  if (item.area !== undefined && item.area !== null) {
+    area = readArea(item.area);
+    // a wrong area could snap tokens all over the board: no grid at all
+    if (area === null) return null;
+  }
   return {
     orientation,
     originX,
@@ -43,6 +62,7 @@ export function readHexGrid(item: HexGridItem | null | undefined): HexGrid | nul
     sizeX: size,
     sizeY: sizeY ?? size,
     snapRadius: radius !== null && radius > 0 ? radius : null,
+    area,
   };
 }
 
@@ -84,8 +104,16 @@ export function nearestHexCenter(grid: HexGrid, x: number, y: number): [number, 
   return axialCenter(grid, q, r);
 }
 
-/** Where a point dropped at (x, y) lands, or null beyond the snap radius. */
+/** Whether (x, y), relative to the board, lies where the hexes are printed. */
+export function inGridArea(grid: HexGrid, x: number, y: number): boolean {
+  const area = grid.area;
+  if (area === null) return true;
+  return x >= area.left && x <= area.right && y >= area.top && y <= area.bottom;
+}
+
+/** Where a point dropped at (x, y) lands, or null outside the area or beyond the snap radius. */
 export function snapToHex(grid: HexGrid, x: number, y: number): [number, number] | null {
+  if (!inGridArea(grid, x, y)) return null;
   const [cx, cy] = nearestHexCenter(grid, x, y);
   if (grid.snapRadius !== null && Math.hypot(cx - x, cy - y) > grid.snapRadius) return null;
   return [cx, cy];
@@ -117,6 +145,14 @@ export function traceHexesIn(
   right: number,
   bottom: number,
 ): void {
+  // only the hexes printed on the board: those centered in its area
+  if (grid.area !== null) {
+    left = Math.max(left, grid.area.left);
+    top = Math.max(top, grid.area.top);
+    right = Math.min(right, grid.area.right);
+    bottom = Math.min(bottom, grid.area.bottom);
+    if (left > right || top > bottom) return;
+  }
   // axial bounds of the rectangle, widened by one hex on every side
   const corners = [
     [left, top],

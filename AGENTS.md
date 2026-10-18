@@ -47,7 +47,7 @@ prétendre avoir couvert une régression. La seule vérification possible est
 | `game.ts`          | Page de jeu : état, canvas, souris, messages serveur (~1 700 lignes) |
 | `lobby.ts`         | Page de lobby : onglets de jeux, tables, modales créer/rejoindre (~700 lignes) |
 | `types.ts`         | Contrat de protocole — lire en premier |
-| `engine/bag.ts` `board.ts` `button.ts` `counter.ts` `counter_box.ts` `dice.ts` | Modèle et dessin des composants |
+| `engine/bag.ts` `board.ts` `button.ts` `counter.ts` `counter_box.ts` `dice.ts` `mw_character.ts` | Modèle et dessin des composants |
 | `engine/hex_grid.ts` | Grille hexagonale d'un plateau (`grid` du `game_json`) : même calcul que `Tourtoirac/Components/hex_grid.py` |
 | `ws/wsClient.ts` `wsWorker.ts` | WebSocket, exécuté dans un **SharedWorker** |
 | `voice.ts`         | Salon audio : WebRTC entre joueurs (`VoiceChat`), relayé par Tourtoirac |
@@ -79,6 +79,7 @@ Les noms ne correspondent pas : c'est le piège principal.
 | `deck`    | `Deck`    | `Deck` (interface, `engine/deck.ts`) | `DeckItem` |
 | `stack`   | `Stack`   | `Deck` avec `isStack` (`engine/deck.ts`) | `DeckItem` (`kind: "stack"`) |
 | `card`    | `Card`    | `Counter` avec `isCard` | `TokenItem` (`kind: "card"`) |
+| `mw_character` | `MwCharacter` | `MwCharacter` (interface, `engine/mw_character.ts`) | `MwCharacterItem` |
 
 Dans `game.ts`, `counters` / `countersById` / `hand` désignent donc des
 **pions**, et `counterBoxes` des compteurs numériques. Partout, l'identifiant
@@ -133,6 +134,13 @@ serveur.
    fois) et lecture du `setup` en attente.
 6. Une fois toutes les images chargées, `maybeRequestSetup()` envoie
    `apply_setup` (joueurs seulement) ; l'événement `setup` → `applySetup`.
+   Un pion ou une carte qu'un `randomizer` du setup sort d'un sac ou d'un
+   paquet y arrive avec sa description complète : `applySetup` crée la carte
+   inconnue (`createCounter`), retire le pion de `bag.content`, l'ajoute à
+   `counters` et applique son `orientation` ; le paquet concerné suit dans la
+   même liste et passe par `refreshDeck`. Une carte qu'un randomizer pose sur
+   un deck ou un stack arrive sans position : `applySetup` la retire de la
+   table (`putInBag(counter, undefined)`).
 
 ### `game.ts` par section
 
@@ -204,6 +212,17 @@ Lobby : `#type-tabs` porte un onglet horizontal par type de jeu
 Les onglets de jeux (`#tabs-container`) ne listent que les jeux du type
 affiché (`visibleGameNames`). L'onglet courant est gardé dans `?type=` ; sans
 ce paramètre, c'est le type du jeu de `?game=` qui est affiché.
+
+Journal des messages du lobby (`#status-container`) : masqué dans `index.html`
+(`hidden`), `lobby.ts` ne l'affiche que si la page est servie depuis
+`localhost`, `127.0.0.1` ou `[::1]` (`LOCAL_HOSTNAMES`) ; jamais en production.
+
+Guide utilisateur du lobby : `public/guide_lobby.pdf`, ouvert dans un nouvel
+onglet par le lien `#help-link` (« Aide (PDF) », en haut à droite de
+`index.html`, chemin relatif pour suivre `OBG_BASE`). Il est généré par
+`docs/guide_lobby.py` (fpdf2, hors dépendances du projet :
+`pip install --target <dir> fpdf2` puis `python3 docs/guide_lobby.py <dir>`).
+Le régénérer quand le comportement du lobby change.
 
 `options.border_shift` : seul `true` active le défilement de la vue quand le
 pointeur approche d'un bord de l'écran (`borderShiftEnabled`, testé dans
@@ -301,9 +320,14 @@ l'image du dessus, relus par `refreshDeck` à chaque `deck_json` reçu
 envoie `draw` (`requestDraw`), dont la réponse passe par `applyPick` comme un
 tirage dans un sac ; les boutons « Shuffle » et « Refill », dessinés sous les
 piles en coordonnées monde et réservés aux joueurs, envoient `shuffle` /
-`refill` (`deckButtonAt` → `requestDeckAction`). Trois boutons « 1 », « 5 », « 10 »
-(`drawButtons` dans `engine/deck.ts`) sont dessinés dans le coin haut droit de
-chaque pile, pour les joueurs seulement : presser l'un d'eux **puis déplacer
+`refill` (`deckButtonAt` → `requestDeckAction`). « Shuffle » n'est pas
+dessiné quand le paquet déclare `display_shuffle: false` (`Deck.displayShuffle`,
+filtré dans `deckButtons`). Les boutons de pioche
+multiple (`drawButtons` dans `engine/deck.ts`) sont dessinés dans le coin haut
+droit de chaque pile, pour les joueurs seulement, un par entier de
+`card_pickup_quantity` du `deck` ou du `stack` (`Deck.drawCounts`, liste déjà
+nettoyée par Tourtoirac, vide = aucun bouton ; absente d'un Tourtoirac plus
+ancien = `[2, 5, 10]`) : presser l'un d'eux **puis déplacer
 le pointeur** bouton enfoncé (`armedDraw`, seuil `LONG_PRESS_SLACK`) envoie
 `draw` avec `count` ; un simple clic ne pioche rien. Un bouton est gris quand
 la pile a moins de cartes que son nombre. Le serveur répond par un événement
@@ -314,11 +338,28 @@ dont `isCard` est vrai : seule elle fait briller une pile (`pileUnder`). Une
 carte piochée arrive sans sa face (`front_src` nul) ; elle la reçoit par
 `flip`, ou par le `release` qui la met dans la main privée du lecteur.
 
+`orientation` d'un `deck` / `stack` (`Deck.orientation`, 0, 90, 180 ou 270) :
+`drawPile` dessine les cartes tournées autour du centre de la pile ;
+`pileFootprint` (miroir de `Deck.footprint` de Tourtoirac) donne le rectangle
+couvert, utilisé par `pileAt`, `drawDecks` et pour placer, droits, les
+boutons, le badge et la légende. Pour un quart de tour (90 / 270), les boutons
+Shuffle / Refill / Deal passent en colonne à droite de la pile
+(`SIDE_BUTTON_WIDTH`), au lieu d'être en dessous. Une carte piochée prend l'`orientation` de
+son `component_json` (`applyPick`).
+
+Rotation des cartes : une carte envoyée avec `orientable: true` a les zones
+de rotation d'un pion (`Counter.rotationZoneAt`, `requestRotate`,
+`applyRotate`) sans code propre. Sur une pile de cartes, `hitCounter` ne vise
+que celle du dessus : c'est la seule qui tourne. Une carte qui entre dans une
+main revient droite : le `release` avec `hand_of` applique l'`orientation` du
+`component_json` (0, posée par le serveur).
+
 Un `stack` est un `Deck` dont `isStack` est vrai, rangé dans `decks` comme les
 autres : une seule pile, dont `width`/`height` sont ceux de la **zone** de
 dépôt. `drawStackCards` dessine la zone (toujours visible) et la carte du
 dessus **centrée** dedans, à sa taille (`DeckPile.topWidth/topHeight`). Ses
-boutons : « Shuffle », et « Deal » seulement si la main privée est active
+boutons : « Shuffle », et « Deal » seulement si le stack déclare
+`"deal": true` (`Deck.deals`) et si la main privée est active
 (`dealPlayers()` renvoie alors le nombre de joueurs de `participants`, sinon
 `null`). `DeckButton.enabled` est faux, et le bouton gris, quand la pile a
 moins de cartes que de joueurs : `requestDeckAction` n'envoie alors rien.
@@ -360,6 +401,31 @@ et aux joueurs d'une autre nationalité que la sienne (`blocksSightOf`). Ils les
 voient avec la face du pion bloquant, le plus haut de la pile qui les concerne
 (`sightBlockers`) ; les pions de leur propre nationalité restent visibles. Ce
 n'est qu'un rendu : le serveur envoie toujours tous les pions.
+
+### Personnage (`mw_character`)
+
+`mwCharacters` / `mwCharactersById`, dessinés sur le plateau sous les pions
+(`drawMwCharacter`, aussi dans la copie d'écran). Les colonnes ne sont
+dessinées et cliquables que sur la face avant ; leur place est fixée en
+proportion de la carte (`columnRects` : marges des cartes de personnage de War
+of the Ring, sous la ligne du haut du tableau). Un clic sur une case
+(`boxAt`) envoie `mark` avant tout pion posé dessus ; l'événement `mark`
+passe par `applyMark`. Un double clic hors des cases, sans pion dessus,
+envoie `flip` (`requestCharacterFlip`) ; `applyFlip` change alors `side`.
+`characterRefused` reprend `modificationRefused` (nationalité, partie non
+lancée, joueur absent). Les images (faces et icônes) sont attendues par
+`componentImages`.
+
+Cartes sous un personnage : `MwCharacter.cards` (`CharacterCard`, faces
+visibles, relues par `refreshCharacter` depuis le `character_json` d'un
+`release` ou d'un `pick`). `drawMwCharacter` dessine leur nombre dans un
+badge en haut à droite, sur les deux faces. Survol (sans pion dessus) :
+`drawCharacterPreview` montre leurs faces, à hauteur fixe
+(`CHARACTER_PREVIEW_CARD_HEIGHT`), la prochaine prise à gauche. Bouton
+enfoncé sur un personnage qui a des cartes : `armedCharacter`, puis dès que
+le pointeur s'éloigne (`LONG_PRESS_SLACK`) `requestCharacterPick` envoie
+`pick` et la carte suit le pointeur comme un tirage dans un sac ; un simple
+clic ou un double clic ne prend rien.
 
 ### Ajouter un type de composant
 
