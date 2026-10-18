@@ -386,6 +386,25 @@ export interface Session {
   shows?: ShowEvent[];
   /** the nicknames of the players in the voice channel (absent from an older Tourtoirac) */
   voice?: string[];
+  /** the chat messages the reader may read, oldest first (absent from an older Tourtoirac) */
+  chat?: ChatMessage[];
+}
+
+/** a message of the chat: general when "to" is null, else private between two players */
+export interface ChatMessage {
+  /** grows with each message of the session, whatever its channel */
+  id: number;
+  from: string;
+  to: string | null;
+  text: string;
+  /** ISO 8601, UTC */
+  time: string | null;
+}
+
+// a message somebody wrote, sent to whoever reads its channel
+export interface ChatEvent {
+  event: "chat";
+  message: ChatMessage;
 }
 
 /** what the browsers of two players tell each other to set up a call (WebRTC) */

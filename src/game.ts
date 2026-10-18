@@ -66,6 +66,7 @@ import type {
   GiveEvent,
   VoiceJoinedEvent,
   VoiceMembersEvent,
+  ChatEvent,
   VoiceSignalEvent,
   DeckEvent,
   DeckItem,
@@ -94,6 +95,7 @@ import type {
   TokenItem,
 } from "./types";
 import { getSocket } from "./ws/wsClient";
+import { ChatPanel } from "./chat";
 
 const MIN_ZOOM = 0.2;
 const MAX_ZOOM = 3.0;
@@ -220,6 +222,7 @@ function updateParticipants(received: SessionParticipant[] | undefined): void {
   if (!Array.isArray(received)) return;
   participants = received;
   renderParticipants();
+  updateChatPartners();
   // the players the hand can be shown to are those of that list
   renderShowSelect();
 }
@@ -305,7 +308,11 @@ function renderParticipants(): void {
         dot.title = "Dans le salon audio";
         line.append(dot);
       }
-      line.append(entry.nickname);
+      // cut by the stylesheet when it is too long for the column
+      const name = document.createElement("span");
+      name.className = "participant-name";
+      name.textContent = entry.nickname;
+      line.append(name);
       line.title = entry.nickname;
       line.dataset.nickname = entry.nickname;
       line.classList.add(entry.role === "watcher" ? "watcher" : "player");
@@ -341,6 +348,28 @@ function renderParticipants(): void {
 }
 
 if (participantsPanel) participantsPanel.addEventListener("mouseleave", hideHandPreview);
+
+// -------------------------------------------------
+// Text chat
+// -------------------------------------------------
+// A window at the bottom of the table, on the left of the participants: the
+// general channel, and for a player a private channel with each other player.
+const chatPanelElement = document.getElementById("chat-panel");
+const chat = chatPanelElement
+  ? new ChatPanel(chatPanelElement, {
+      send: (message) => {
+        getSocket()?.send(message);
+        console.log("[WS] Envoyé :", JSON.stringify(message));
+      },
+      myName: () => loadPlayerIdentity()?.name,
+    })
+  : null;
+
+// the private tabs follow the players of the game; a watcher has none
+function updateChatPartners(): void {
+  const players = participants.filter((entry) => entry.role === "player").map((entry) => entry.nickname);
+  chat?.setPartners(players, !isWatcher);
+}
 
 // -------------------------------------------------
 // Voice channel
@@ -3638,6 +3667,8 @@ function handleServerMessage(raw: unknown): void {
     } else if (data.event === "voice_signal") {
       const signal = data as unknown as VoiceSignalEvent;
       void voice.onSignal(signal.from, signal.data);
+    } else if (data.event === "chat") {
+      chat?.receive((data as unknown as ChatEvent).message);
     } else if (data.event === "give") {
       applyGive(data as unknown as GiveEvent);
     } else if (data.event === "show") {
@@ -4047,6 +4078,7 @@ function handleSessionEvent(data: GameServerMessage): void {
   if (typeof session.started === "boolean") isStarted = session.started;
   if (Array.isArray(session.missing_players)) missingPlayers = session.missing_players;
   updateParticipants(session.participants);
+  chat?.setHistory(session.chat);
   updateLeaveLinks();
   // a session joined again after a reconnection: the server knows a new
   // connection, outside the voice channel, and the reader calls back
@@ -4115,6 +4147,8 @@ function applySessionClosed(): void {
   isClosed = true;
   isWatcher = true;
   isOwner = false;
+  // the players left are watchers now: they no longer write privately
+  updateChatPartners();
   // nobody talks over a closed game
   voice.leave();
   updateVoiceControls();

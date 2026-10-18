@@ -51,6 +51,7 @@ prétendre avoir couvert une régression. La seule vérification possible est
 | `engine/hex_grid.ts` | Grille hexagonale d'un plateau (`grid` du `game_json`) : même calcul que `Tourtoirac/Components/hex_grid.py` |
 | `ws/wsClient.ts` `wsWorker.ts` | WebSocket, exécuté dans un **SharedWorker** |
 | `voice.ts`         | Salon audio : WebRTC entre joueurs (`VoiceChat`), relayé par Tourtoirac |
+| `chat.ts`          | Chat texte (`ChatPanel`) : canal général et canaux privés entre joueurs |
 | `gameLock.ts`      | Une seule page de jeu par navigateur (Web Lock `obg_game`) |
 | `serverErrors.ts`  | Texte de l'erreur `invalid_component` (composant du `game_json` mal décrit), affiché par le lobby et la page de jeu |
 | `navigation.ts`    | URL `index.html` ↔ `game.html`, avec `?game=<nom>` pour garder l'onglet |
@@ -257,6 +258,19 @@ Audio, `SPEAKING_LEVEL`) ; `refreshVoiceDots` les allume sur place sans
 reconstruire la liste. À chaque `session_joined` (reconnexion), `rejoin`
 renvoie `voice_join` : la nouvelle connexion est hors du salon. `pagehide`
 envoie `voice_leave`. Les `voice_signal` ne sont pas journalisés.
+
+Chat texte (`chat.ts`, section *Text chat* de `game.ts`) : `#chat-panel`,
+en bas de la colonne `#participants` (largeur fixe de 300 px, colonne flex :
+la liste défile seule au-dessus du chat, qui garde 280 px de haut). Un pseudo
+trop long est tronqué (`.participant-name`, `.chat-author`, onglets), entier
+dans le `title`.
+Onglet « Général » pour tous, plus un onglet par autre joueur pour un joueur
+(`setPartners`, recalculé à chaque liste de participants ; un spectateur n'a
+que le général, un canal privé déjà rempli garde son onglet). `chat_send`
+`{text, to?}` part au submit ; l'événement `chat` → `receive`, dédoublonné
+par `id` avec l'historique `session.chat` (`setHistory`). Compteur de non-lus
+par onglet, et sur le bouton ▼/▲ qui réduit la fenêtre. Le texte est posé en
+`textContent`, jamais en HTML. Les raccourcis clavier ignorent la saisie.
 
 Avec la main privée, chaque joueur de `#participants` a une icône de main de
 cartes avant son pseudo (`.hand-icon`, `Common/resources/hand_cards.svg`
