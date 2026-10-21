@@ -1,3 +1,10 @@
+import {
+  AIR_FORCE_LABEL,
+  AIR_FORCE_TAB,
+  airForceAvailable,
+  renderAirForceTab,
+  startAirForceLobby,
+} from "./airForceLobby";
 import { GAME_OPEN_ELSEWHERE_MESSAGE, isGameOpenElsewhere } from "./gameLock";
 import { gameEntryUrl } from "./navigation";
 import { storePlayerIdentity, storeSession } from "./session";
@@ -79,9 +86,17 @@ function gameTypeOf(gameName: string): GameType {
   return readGameType(gameInfo[gameName]?.type) ?? DEFAULT_GAME_TYPE;
 }
 
-// every game the server offers: one entry per game of sessions_info
+// every game the server offers: one entry per game of sessions_info, plus Air
+// Force when Hautefort answers (a wargame: it has no entry in gameInfo)
 function offeredGameNames(): string[] {
-  return Object.keys(sessionsData).sort((a, b) => a.localeCompare(b));
+  const names = Object.keys(sessionsData);
+  if (airForceAvailable()) names.push(AIR_FORCE_TAB);
+  return names.sort((a, b) => a.localeCompare(b));
+}
+
+function tabLabel(name: string): string {
+  if (name === AIR_FORCE_TAB) return AIR_FORCE_LABEL;
+  return gameInfo[name]?.display_name || name.charAt(0).toUpperCase() + name.slice(1);
 }
 
 // The type tab shown: the one the player chose, else the one of the game the
@@ -673,13 +688,20 @@ function renderAll(): void {
     const btn = document.createElement("button");
     btn.className = "tab-button" + (index === activeIndex ? " active" : "");
     // the name stays the identifier sent to Chabanas: only the label changes
-    btn.textContent = game?.display_name || name.charAt(0).toUpperCase() + name.slice(1);
+    btn.textContent = tabLabel(name);
     btn.onclick = () => switchTab(btn, index, name);
     tabsContainer.appendChild(btn);
 
     const container = document.createElement("div");
     container.className = "table-container" + (index === activeIndex ? " active" : "");
     container.id = "table-" + index;
+
+    // Air Force games are played in Hautefort, not on the OBG table
+    if (name === AIR_FORCE_TAB) {
+      renderAirForceTab(container);
+      tablesContainer.appendChild(container);
+      return;
+    }
 
     if (sessions.length > 0) {
       const table = document.createElement("table");
@@ -849,6 +871,7 @@ function bindEventHandlers(): void {
 function main(): void {
   bindEventHandlers();
   connectSharedSocket();
+  startAirForceLobby(renderAll);
 }
 
 main();

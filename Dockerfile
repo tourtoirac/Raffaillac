@@ -24,6 +24,8 @@ FROM nginx:alpine
 RUN rm -rf /usr/share/nginx/html/*
 
 COPY --from=build /app/dist /usr/share/nginx/html/
+# static site + /hautefort/ forwarded to the Air Force service
+COPY nginx/default.conf /etc/nginx/conf.d/default.conf
 
 # Game resources (Games/) are mounted as a volume at /usr/share/nginx/html/Games
 

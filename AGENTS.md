@@ -53,6 +53,7 @@ prétendre avoir couvert une régression. La seule vérification possible est
 | `voice.ts`         | Salon audio : WebRTC entre joueurs (`VoiceChat`), relayé par Tourtoirac |
 | `chat.ts`          | Chat texte (`ChatPanel`) : canal général et canaux privés entre joueurs |
 | `gameLock.ts`      | Une seule page de jeu par navigateur (Web Lock `obg_game`) |
+| `idle.ts`          | Déconnexion d'un joueur inactif (popups, minuterie) |
 | `serverErrors.ts`  | Texte de l'erreur `invalid_component` (composant du `game_json` mal décrit), affiché par le lobby et la page de jeu |
 | `navigation.ts`    | URL `index.html` ↔ `game.html`, avec `?game=<nom>` pour garder l'onglet |
 | `session.ts`       | `sessionStorage` : session courante (`obg_session`) et identité (`obg_player_identity`) |
@@ -73,7 +74,7 @@ Les noms ne correspondent pas : c'est le piège principal.
 | `board`   | `Board`   | `Board` (interface, `engine/board.ts`) | `BoardItem` |
 | `board_group` | `BoardGroup` | `BoardGroup` (interface, `engine/board.ts`) | `BoardGroupItem` |
 | `token`   | `Token`   | **`Counter`** (classe, `engine/counter.ts`) | `TokenItem` |
-| `counter` | `Counter` | **`CounterBox`** (interface, `engine/counter_box.ts`) | `CounterItem` |
+| `counter` | `Counter` | **`CounterBox`** (interface, `engine/counter_box.ts`) ; `text` dessiné au-dessus de la valeur dans la moitié haute (police ajustée, coupure à un espace si elle grandit le texte), cadre `border` intérieur) | `CounterItem` |
 | `dice`    | `Dice`    | `Dice` (classe, `engine/dice.ts`) | `DiceItem` |
 | `dice_pool` | `DicePool` | `DicePool` (interface, `engine/dice.ts`) | `DicePoolItem` |
 | `bag`     | `Bag`     | `Bag` (interface, `engine/bag.ts`) | `BagItem` |
@@ -98,7 +99,7 @@ serveur.
 - Chemin public : `OBG_BASE` au build (`vite.config.ts`, `ARG` du
   `Dockerfile`), `/` par défaut, `/obg/` en production. Les `src` des
   `game_json` restent des chemins absolus `/Games/...`, hors de ce préfixe.
-- `ws/wsClient.ts` expose `getSocket()` → `{send, setMessageHandler,
+- `ws/wsClient.ts` expose `getSocket()` → `{send, drop, setMessageHandler,
   setStateHandler}`, en singleton sur `window.obgSocket`. Les messages reçus
   avant `setMessageHandler` sont mis en tampon.
 - **Une seule partie par navigateur** (`gameLock.ts`) : la WebSocket étant
@@ -110,8 +111,25 @@ serveur.
   (`openingGameName` à `null`) : il vient d'un autre onglet. Le verrou tombe
   seul à la fermeture de l'onglet. Hors contexte sécurisé (ni https ni
   localhost), l'API n'existe pas et le garde-fou est inactif.
+- **Joueur inactif** (`idle.ts`, branché par `game.ts` une fois le verrou
+  pris) : après 5 min sans activité (`IDLE_WARNING_MS`), un popup « Pas
+  d'activités dans le jeu depuis 5 minutes » avec un bouton OK, qui compte
+  comme une activité. Sans réponse en 1 min (`IDLE_DISCONNECT_MS`),
+  `disconnectForInactivity` quitte le salon audio et envoie `drop` au worker,
+  qui ferme la WebSocket : Tourtoirac retire le joueur de la session
+  (`delete_user`), comme à la fermeture de l'onglet ; le siège reste. Le
+  worker se reconnecte pour les autres onglets, mais la page ne renvoie plus
+  `resume_session` (`idleDisconnected`) et propose « Revenir dans la partie »
+  (rechargement) ou « Retour au lobby ». Activités : déplacement de la
+  souris sur le canvas, clic, touche, molette, **seulement si l'onglet a le
+  focus** (`document.hasFocus()` et onglet visible). Seuls les joueurs d'une
+  partie démarrée (`isStarted`) sont surveillés : ni les spectateurs, ni une
+  partie close, ni l'attente des autres joueurs. Les échéances sont comparées à l'horloge :
+  un onglet en arrière-plan, dont les minuteries sont ralenties, est
+  déconnecté à peu près à l'heure.
 - Le navigateur **ne parle qu'à Tourtoirac**. Aucun appel HTTP vers Chabanas
-  (le seul `fetch` est celui de `conf.json` par `wsWorker.ts`).
+  (le seul `fetch` est celui de `conf.json` par `wsWorker.ts`). Seule
+  exception : l'onglet Air Force, qui parle à Hautefort (voir § Lobby).
 
 ### Parcours d'un joueur
 
@@ -132,7 +150,13 @@ serveur.
    `nickname`, `role`), car la page de jeu a une nouvelle connexion côté
    serveur.
 5. `session_joined` → `handleSessionEvent` → `loadComponents()` (une seule
-   fois) et lecture du `setup` en attente.
+   fois) et lecture du `setup` en attente. La session de `sessionStorage` ne
+   sert qu'à précharger les images : c'est un instantané du dernier message
+   de session, antérieur au setup et aux coups joués depuis. La situation
+   affichée est **toujours** celle de la réponse à `resume_session`
+   (`componentsLoaded` reste `false` au chargement de la page), sinon un
+   rechargement (F5, « Revenir dans la partie ») montre la table d'avant le
+   setup et perd la main privée.
 6. Une fois toutes les images chargées, `maybeRequestSetup()` envoie
    `apply_setup` (joueurs seulement) ; l'événement `setup` → `applySetup`.
    Un pion ou une carte qu'un `randomizer` du setup sort d'un sac ou d'un
@@ -207,12 +231,33 @@ pions dans le bandeau d'info (`showComponentId` dans `game.ts`, lu dans
 messages de refus (« Pion réservé à … ») restent affichés, sans le nom. C'est
 un réglage purement client : Tourtoirac transmet `options` tel quel.
 
+Le bandeau d'info en haut du canvas a deux sources. `counterInfoText` (nom et
+position du pion en main ou relâché, vide si les id sont masqués) y reste en
+permanence. Tout autre message passe par `showInfoMessage` : il s'affiche
+par-dessus pendant `INFO_MESSAGE_MS` (5 s) après le dernier message, puis le
+bandeau revient à `counterInfoText`, ou disparaît s'il est vide.
+
 Lobby : `#type-tabs` porte un onglet horizontal par type de jeu
 (`GAME_TYPES` dans `lobby.ts` : `Boardgame`, `Wargame`). Le type vient de
 `GameInfo.type`, défini dans Chabanas ; absent, le jeu est rangé en `Wargame`.
 Les onglets de jeux (`#tabs-container`) ne listent que les jeux du type
 affiché (`visibleGameNames`). L'onglet courant est gardé dans `?type=` ; sans
 ce paramètre, c'est le type du jeu de `?game=` qui est affiché.
+
+Onglet **Air Force** (`airForceLobby.ts`, clé `air_force`, type Wargame) :
+Air Force ne se joue pas sur la table OBG mais dans le service `OBG/Hautefort`.
+L'onglet n'apparaît que si Hautefort répond (WebSocket `hautefort/ws/lobby`,
+qui pousse la liste des parties à chaque changement) ; il est ajouté par
+`offeredGameNames` et rendu par `renderAirForceTab` dans `renderAll`. Création,
+adhésion, reprise d'un siège déconnecté et spectateur passent par l'API REST
+de Hautefort (`hautefort/api/...`, même origine), avec les mêmes champs que les
+modales OBG (pseudo, clé d'utilisateur, clé d'accès). Le jeton de siège rendu
+est rangé dans `sessionStorage["hautefort_seats"]` puis la page part sur
+`hautefort/?game=<id>`. Pas de `gameLock` : Hautefort a ses propres sockets.
+Le nginx de l'image (`nginx/default.conf`) relaie `/hautefort/` vers
+`obg-hautefort:8000`, préfixe retiré et WebSockets comprises (résolution DNS
+à la requête : le lobby reste servi si Hautefort est arrêté) ; `npm run dev`
+fait de même vers `localhost:12210` (`vite.config.ts`).
 
 Journal des messages du lobby (`#status-container`) : masqué dans `index.html`
 (`hidden`), `lobby.ts` ne l'affiche que si la page est servie depuis
@@ -236,6 +281,23 @@ d'une partie non close déplace le nom d'un joueur par glisser-déposer HTML5
 (`makeParticipantSortable`, `draggedParticipant`) ; le dépôt envoie
 `order_players` avec la liste complète (`requestPlayerOrder`), et le
 `session_status` renvoyé redessine la liste sur tous les écrans.
+
+Un œil (`Common/resources/eye.svg`, `followEyeButton`) suit le nom de chaque
+autre joueur. Le cliquer envoie `follow` et centre la caméra, à chaque image
+(`followView`), sur la vue que ce joueur annonce (`view`, `applyView`) ; le
+recliquer rend la caméra (`stopFollowing`). Pendant le suivi, la molette
+zoome autour du centre de l'écran, le bouton droit et le défilement au bord
+ne déplacent plus la vue. Un joueur n'envoie le centre de sa vue que
+s'il est suivi (`followers`, lu dans la `Session` puis dans l'événement
+`followed`, `applyFollowed`). L'œil d'un joueur qui suit le lecteur est
+désactivé : deux joueurs ne se suivent jamais l'un l'autre : `sendView`, coordonnées logiques arrondies,
+au plus toutes les 50 ms et seulement s'il a changé, ou aussitôt pour un
+nouveau suiveur. Chez le suiveur, la caméra ne saute pas sur le centre reçu :
+`followShown` glisse vers `followedView` à chaque image (lissage exponentiel de
+constante `FOLLOW_SMOOTHING_S`, indépendant de la fréquence d'affichage) ; le
+premier centre reçu est montré d'emblée. Un joueur suivi qui quitte la partie ou se
+déconnecte (`connected` faux) n'est plus suivi, même s'il revient. Une déconnexion du
+lecteur coupe aussi le suivi : `handleSessionEvent` l'oublie à la reprise.
 
 `#participants`, à droite de la table, liste les pseudos de la partie d'après
 `participants` (`Session` et événement `session_status`, renvoyé par
@@ -274,7 +336,9 @@ par onglet, et sur le bouton ▼/▲ qui réduit la fenêtre. Le texte est posé
 
 Avec la main privée, chaque joueur de `#participants` a une icône de main de
 cartes avant son pseudo (`.hand-icon`, `Common/resources/hand_cards.svg`
-importé en `?raw` pour prendre la couleur du nom). Le pseudo d'un **autre**
+importé en `?raw` pour prendre la couleur du nom). Un joueur dont l'entrée de
+`participants` porte `icon` (clé `player_icons` du jeu) a cette image à la
+place (`.player-icon`), main privée ou non. Le pseudo d'un **autre**
 joueur (`li.hand-receiver`, `data-nickname`) reçoit un objet relâché dessus
 (`receiverAt`, allumé par `highlightReceiver` pendant le transport) : un
 pion tenu depuis la table part en `release` avec `hand: true` et `to_player`
@@ -341,7 +405,8 @@ multiple (`drawButtons` dans `engine/deck.ts`) sont dessinés dans le coin haut
 droit de chaque pile, pour les joueurs seulement, un par entier de
 `card_pickup_quantity` du `deck` ou du `stack` (`Deck.drawCounts`, liste déjà
 nettoyée par Tourtoirac, vide = aucun bouton ; absente d'un Tourtoirac plus
-ancien = `[2, 5, 10]`) : presser l'un d'eux **puis déplacer
+ancien = `[2, 5, 10]`), sur les seules piles de `card_pickup_piles`
+(`Deck.drawPiles`, absente = toutes) : presser l'un d'eux **puis déplacer
 le pointeur** bouton enfoncé (`armedDraw`, seuil `LONG_PRESS_SLACK`) envoie
 `draw` avec `count` ; un simple clic ne pioche rien. Un bouton est gris quand
 la pile a moins de cartes que son nombre. Le serveur répond par un événement
@@ -381,7 +446,8 @@ L'événement `deal` passe par `applyDeal` : pile et mains relues, et les
 `cards` reçues (celles du lecteur seulement) rejoignent `myHand`.
 
 `Session.documents` (clé `documents` du `game_json`, des PDF) alimente le menu
-déroulant `#documents-select`, à gauche du bandeau `#options-bar` : première
+déroulant `#documents-select`, en haut du panneau `#participants`, au-dessus
+de « Rejoindre l'audio » (spectateurs compris) : première
 entrée « Consulter », puis le nom de chaque document ; en choisir un l'ouvre
 dans un nouvel onglet et ramène le menu sur « Consulter ». Sans document, le
 menu est masqué.

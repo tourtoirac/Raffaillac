@@ -25,5 +25,13 @@ export default defineConfig({
     fs: {
       allow: [".", resolve(import.meta.dirname, "../Common")],
     },
+    // Air Force tab: a local Hautefort, as the nginx of the image forwards it
+    proxy: {
+      "/hautefort/": {
+        target: "http://localhost:12210",
+        ws: true,
+        rewrite: (path) => path.replace(/^\/hautefort/, ""),
+      },
+    },
   },
 });

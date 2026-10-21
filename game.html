@@ -83,9 +83,11 @@
     #options-bar[hidden] {
       display: none;
     }
-    /* The documents of the game, on the left of the bar: the auto margin
-       pushes the buttons to the right. */
+    /* The documents of the game, at the top of the participants panel,
+       above the voice channel. */
     #documents-select {
+      flex: none;
+      width: 100%;
       font: inherit;
       font-size: 14px;
       color: #ffd700;
@@ -93,8 +95,6 @@
       border: 1px solid currentColor;
       border-radius: 4px;
       padding: 4px 10px;
-      margin-right: auto;
-      max-width: 50%;
       cursor: pointer;
     }
     #documents-select[hidden] {
@@ -128,6 +128,42 @@
     }
     #loading-overlay[hidden] {
       display: none;
+    }
+    /* Inactivity popups: above everything, the page can only answer them. */
+    .idle-overlay {
+      position: fixed;
+      inset: 0;
+      z-index: 10000;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      background: rgba(0, 0, 0, 0.55);
+    }
+    .idle-overlay[hidden] {
+      display: none;
+    }
+    .idle-box {
+      display: flex;
+      flex-direction: column;
+      align-items: center;
+      gap: 12px;
+      max-width: 420px;
+      padding: 20px 28px;
+      border-radius: 8px;
+      background: #fff;
+      color: #222;
+      font-size: 17px;
+      text-align: center;
+      box-shadow: 0 6px 24px rgba(0, 0, 0, 0.4);
+    }
+    .idle-box p {
+      margin: 0;
+    }
+    .idle-box button {
+      min-width: 120px;
+      padding: 6px 16px;
+      font-size: 15px;
+      cursor: pointer;
     }
     #loading-bar {
       width: min(420px, 70%);
@@ -183,6 +219,7 @@
     }
     #participants .voice-dot,
     #participants .hand-icon,
+    #participants .player-icon,
     #participants .hand-count {
       flex: none;
     }
@@ -260,6 +297,44 @@
       width: 100%;
       height: 100%;
       display: block;
+    }
+    /* the eye next to another player: follows its view while lit */
+    #participants .follow-eye {
+      flex: none;
+      display: inline-flex;
+      width: 22px;
+      height: 18px;
+      margin-left: 6px;
+      padding: 1px 2px;
+      background: none;
+      border: 1px solid transparent;
+      border-radius: 3px;
+      color: #888;
+      cursor: pointer;
+    }
+    #participants .follow-eye:hover {
+      color: #eee;
+    }
+    /* that player follows the reader: it cannot be followed back */
+    #participants .follow-eye:disabled {
+      color: #555;
+      cursor: not-allowed;
+    }
+    #participants .follow-eye.active {
+      color: #6fcf6f;
+      border-color: #6fcf6f;
+    }
+    #participants .follow-eye svg {
+      width: 100%;
+      height: 100%;
+      display: block;
+    }
+    /* the image the game gives a player (player_icons), before its name */
+    #participants .player-icon {
+      width: 18px;
+      height: 18px;
+      margin-right: 5px;
+      object-fit: contain;
     }
     /* a carried token released on this name joins that hand */
     #participants li.hand-receiver.drop-target {
@@ -633,10 +708,6 @@
   <!-- each button shows unless the game turns it off in its options; the
        first one is for the players only -->
   <div id="options-bar" hidden>
-    <!-- filled from the "documents" of the game; hidden when it has none -->
-    <select id="documents-select" aria-label="Consulter un document" hidden>
-      <option value="">Consulter</option>
-    </select>
     <button type="button" class="back" id="fix-link" title="Restaure le cadre vert à la position actuelle des pions" hidden>Fixe la position</button>
     <button type="button" class="back" id="screenshot-link" hidden>Copie d'écran</button>
   </div>
@@ -647,6 +718,10 @@
     <div id="show-zones"></div>
     <!-- filled from the participants the server sends at each arrival or departure -->
     <aside id="participants" aria-label="Joueurs et spectateurs" hidden>
+      <!-- filled from the "documents" of the game; hidden when it has none -->
+      <select id="documents-select" aria-label="Consulter un document" hidden>
+        <option value="">Consulter</option>
+      </select>
       <!-- players only: the voice channel of the game (src/voice.ts) -->
       <div id="voice-controls" hidden>
         <button id="voice-join-button" type="button">Rejoindre l'audio</button>

@@ -14,6 +14,8 @@ export interface SocketWsMessage {
 
 export interface ObgSocket {
   send(data: unknown): void;
+  /** closes the WebSocket: the server forgets the session of this browser, then it reconnects */
+  drop(): void;
   setMessageHandler(fn: (data: unknown) => void): void;
   setStateHandler(fn: (message: SocketStateMessage) => void): void;
 }
@@ -70,6 +72,9 @@ function createSocket(): ObgSocket | null {
   return {
     send(data) {
       worker.port.postMessage({ type: "send", data });
+    },
+    drop() {
+      worker.port.postMessage({ type: "drop" });
     },
     setMessageHandler(fn) {
       wsHandler = fn;

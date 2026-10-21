@@ -1,7 +1,7 @@
 /// <reference lib="webworker" />
 
 interface WorkerMessage {
-  type: "send" | "connect";
+  type: "send" | "connect" | "drop";
   data?: unknown;
 }
 
@@ -85,6 +85,11 @@ function handlePortMessage(event: MessageEvent): void {
       break;
     case "connect":
       connect();
+      break;
+    case "drop":
+      // closes the connection: the server takes the user out of its session.
+      // onclose reconnects as after any cut, for the other tabs of the origin
+      ws?.close();
       break;
     default:
       console.warn("[ws_worker] Type de message inconnu :", message.type);

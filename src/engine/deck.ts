@@ -84,7 +84,8 @@ export interface Deck {
   readonly name: string;
   /**
    * A stack: one single pile that deals its cards to the private hands. Its
-   * size is the one of its area, in which the cards are centered.
+   * size is the one of its area, in which the cards are centered. A slot is
+   * drawn the same way: the server sends it without any button.
    */
   readonly isStack: boolean;
   /** size of one pile, that is of one card; for a stack, of its area */
@@ -94,6 +95,8 @@ export interface Deck {
   readonly text: string | null;
   /** how many cards each multi-draw button takes; empty, no button */
   readonly drawCounts: readonly number[];
+  /** the piles that show the multi-draw buttons; null, every pile */
+  readonly drawPiles: readonly string[] | null;
   /**
    * angle the piles are turned by around their center, in degrees: 0, 90,
    * 180 or 270. x, y, width and height are those of the pile before it is
@@ -169,11 +172,13 @@ function readPiles(item: DeckItem): DeckPile[] {
 export function createDeck(item: DeckItem): Deck {
   return {
     name: item.id,
-    isStack: item.kind === "stack",
+    // a slot is a stack where the cards keep their side: drawn the same way
+    isStack: item.kind === "stack" || item.kind === "slot",
     width: item.width,
     height: item.height,
     text: typeof item.text === "string" && item.text !== "" ? item.text : null,
     drawCounts: readDrawCounts(item.card_pickup_quantity),
+    drawPiles: Array.isArray(item.card_pickup_piles) ? item.card_pickup_piles : null,
     orientation: readOrientation(item.orientation),
     deals: item.kind === "stack" && item.deal === true,
     displayShuffle: item.display_shuffle !== false,
@@ -285,7 +290,8 @@ export function deckButtons(deck: Deck, dealTo: number | null): DeckButton[] {
 export function drawButtons(deck: Deck): DrawButton[] {
   const counts = deck.drawCounts;
   if (counts.length === 0) return [];
-  return deck.piles.flatMap((pile) => {
+  const piles = deck.piles.filter((pile) => deck.drawPiles === null || deck.drawPiles.includes(pile.name));
+  return piles.flatMap((pile) => {
     // upright, in the top-right corner of the pile as it lies on the table
     const area = pileFootprint(deck, pile);
     const room = area.width - 2 * DRAW_BUTTON_MARGIN - (counts.length - 1) * DRAW_BUTTON_GAP;

@@ -21,6 +21,20 @@ const VALUE_HEIGHT_RATIO = 0.75;
 // en dessous de cette taille un chiffre n'est plus lisible : on preferera qu'il
 // deborde un peu plutot que de le rendre illisible
 const MIN_FONT_SIZE = 6;
+// With a label, the label takes the upper part of the counter and the value
+// the lower part. LABEL_PART is the share of the height given to the label.
+const LABEL_PART = 0.5;
+// the label fills at most this share of its own area, so it does not touch
+// the top edge nor the value
+const LABEL_HEIGHT_RATIO = 0.85;
+// distance between two label lines, as a multiple of the font size
+const LABEL_LINE_SPACING = 1.1;
+// font of the label: proportional, so a word takes less room than in monospace
+const LABEL_FONT = "bold %spx sans-serif";
+// size at which the label is measured before being scaled to fit
+const LABEL_MEASURE_SIZE = 100;
+// thickness of the frame when the server sends none
+const DEFAULT_BORDER_WIDTH = 3;
 
 export type CounterAction = "increment" | "decrement";
 
@@ -40,6 +54,11 @@ export interface CounterBox {
   readonly min: number | null;
   /** borne haute ; null quand le jeu laisse la valeur monter sans fin */
   readonly max: number | null;
+  /** optional label drawn above the value, at most two lines; null when absent */
+  readonly text: string | null;
+  /** color of the frame around the counter; null when the game wants none */
+  readonly border: string | null;
+  readonly borderWidth: number;
 }
 
 export function createCounterBox(item: CounterItem): CounterBox {
@@ -59,6 +78,9 @@ export function createCounterBox(item: CounterItem): CounterBox {
     // borne, pas une absence de borne
     min: item.min ?? null,
     max: item.max ?? null,
+    text: item.text ? item.text : null,
+    border: item.border ? item.border : null,
+    borderWidth: item.border_width && item.border_width > 0 ? item.border_width : DEFAULT_BORDER_WIDTH,
   };
 }
 
@@ -106,6 +128,87 @@ export function fitFontSize(
   return size;
 }
 
+/** The font of the label at a given size. */
+function labelFont(size: number): string {
+  return LABEL_FONT.replace("%s", String(size));
+}
+
+/**
+ * The ways the label may be laid out. A label written on two lines keeps its
+ * own break. A single line may stay whole or be cut at any space into two
+ * lines: drawCounterBox keeps whichever layout gives the largest font.
+ */
+function labelLayouts(text: string): string[][] {
+  if (text.includes("\n")) return [text.split("\n").slice(0, 2)];
+  const layouts = [[text]];
+  for (let i = text.indexOf(" "); i !== -1; i = text.indexOf(" ", i + 1)) {
+    layouts.push([text.slice(0, i).trim(), text.slice(i + 1).trim()]);
+  }
+  return layouts;
+}
+
+/**
+ * The largest font size at which these lines fit in the area, in width as in
+ * height. The width of a text grows in proportion to its font size, so the
+ * lines are measured once at LABEL_MEASURE_SIZE and the size is scaled from it.
+ */
+function fitLabelSize(
+  ctx: CanvasRenderingContext2D,
+  lines: string[],
+  width: number,
+  height: number,
+): number {
+  ctx.font = labelFont(LABEL_MEASURE_SIZE);
+  const widest = Math.max(...lines.map((line) => ctx.measureText(line).width));
+  const byHeight = (height * LABEL_HEIGHT_RATIO) / (lines.length * LABEL_LINE_SPACING);
+  // a canvas that cannot measure returns 0: the height alone decides then
+  const byWidth = widest > 0 ? (LABEL_MEASURE_SIZE * width * VALUE_WIDTH_RATIO) / widest : byHeight;
+  return Math.max(MIN_FONT_SIZE, Math.floor(Math.min(byHeight, byWidth)));
+}
+
+/**
+ * Draws the label centered in the upper part of the counter, each line
+ * centered on its own, in the largest font that keeps it inside.
+ */
+function drawLabel(ctx: CanvasRenderingContext2D, box: CounterBox, text: string): void {
+  // the label stays inside the frame, when there is one
+  const inset = box.border !== null ? box.borderWidth : 0;
+  const areaHeight = box.height * LABEL_PART - inset;
+  let best: string[] = [text];
+  let bestSize = 0;
+  for (const lines of labelLayouts(text)) {
+    const size = fitLabelSize(ctx, lines, box.width - 2 * inset, areaHeight);
+    if (size > bestSize) {
+      best = lines;
+      bestSize = size;
+    }
+  }
+
+  ctx.fillStyle = box.fontColor;
+  ctx.font = labelFont(bestSize);
+  ctx.textAlign = "center";
+  ctx.textBaseline = "middle";
+  const lineHeight = bestSize * LABEL_LINE_SPACING;
+  const firstY = box.y + inset + areaHeight / 2 - (lineHeight * (best.length - 1)) / 2;
+  best.forEach((line, index) => {
+    ctx.fillText(line, box.x + box.width / 2, firstY + index * lineHeight);
+  });
+}
+
+/**
+ * The vertical center of the value: the middle of the counter, or the middle
+ * of its lower part when a label takes the upper one. The + and - follow it.
+ */
+function valueCenterY(box: CounterBox): number {
+  if (box.text === null) return box.y + box.height / 2;
+  return box.y + box.height * LABEL_PART + (box.height * (1 - LABEL_PART)) / 2;
+}
+
+/** The height the value may use: all the counter, or what the label leaves. */
+function valueAreaHeight(box: CounterBox): number {
+  return box.text === null ? box.height : box.height * (1 - LABEL_PART);
+}
+
 /**
  * Dessine le fond du compteur et sa valeur, au centre. Les deux zones + et -
  * sont dessinées à part, par drawCounterActionZones, et seulement quand le
@@ -120,13 +223,27 @@ export function drawCounterBox(ctx: CanvasRenderingContext2D, box: CounterBox): 
 
   // la valeur est centree dans le rectangle, et sa police retrécit pour que le
   // texte tienne toujours, meme quand la valeur gagne un chiffre
+  // the frame lies inside the counter, so it never grows past its size
+  if (box.border !== null) {
+    ctx.strokeStyle = box.border;
+    ctx.lineWidth = box.borderWidth;
+    ctx.strokeRect(
+      box.x + box.borderWidth / 2,
+      box.y + box.borderWidth / 2,
+      box.width - box.borderWidth,
+      box.height - box.borderWidth,
+    );
+  }
+
+  if (box.text !== null) drawLabel(ctx, box, box.text);
+
   const text = String(box.value);
-  const size = fitFontSize(ctx, text, box.width, box.height);
+  const size = fitFontSize(ctx, text, box.width, valueAreaHeight(box));
   ctx.fillStyle = box.fontColor;
   ctx.font = `bold ${size}px monospace`;
   ctx.textAlign = "center";
   ctx.textBaseline = "middle";
-  ctx.fillText(text, box.x + box.width / 2, box.y + box.height / 2);
+  ctx.fillText(text, box.x + box.width / 2, valueCenterY(box));
   // le compteur ne doit pas laisser la police derriere lui pour le suivant
   ctx.textAlign = "start";
   ctx.textBaseline = "alphabetic";
@@ -142,7 +259,7 @@ export function drawCounterBox(ctx: CanvasRenderingContext2D, box: CounterBox): 
 export function drawCounterActionZones(ctx: CanvasRenderingContext2D, box: CounterBox): void {
   const zoneWidth = box.width * COUNTER_ZONE_RATIO;
   const zoneHeight = box.height * COUNTER_ZONE_RATIO;
-  const top = box.y + box.height / 2 - zoneHeight / 2;
+  const top = valueCenterY(box) - zoneHeight / 2;
 
   const zones: [CounterAction, number][] = [
     ["decrement", box.x],
@@ -179,7 +296,7 @@ export function counterActionZoneAt(box: CounterBox, wx: number, wy: number): Co
 
   const zoneWidth = box.width * COUNTER_ZONE_RATIO;
   const zoneHeight = box.height * COUNTER_ZONE_RATIO;
-  const top = box.y + box.height / 2 - zoneHeight / 2;
+  const top = valueCenterY(box) - zoneHeight / 2;
   // la zone ne couvre que la bande verticale des signes, pas toute la hauteur :
   // cliquer au-dessus du rectangle ne doit rien declencher
   if (wy < top || wy > top + zoneHeight) return null;

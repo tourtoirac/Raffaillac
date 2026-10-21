@@ -47,6 +47,7 @@ import flipHandIcon from "../../Common/resources/flip_hand.svg";
 import { VoiceChat } from "./voice";
 // inlined as markup: drawn in currentColor, it takes the color of the name
 import handCardsIcon from "../../Common/resources/hand_cards.svg?raw";
+import eyeIcon from "../../Common/resources/eye.svg?raw";
 import { lobbyReturnUrl, originGameName } from "./navigation";
 import { acquireGameLock, GAME_OPEN_ELSEWHERE_MESSAGE } from "./gameLock";
 import { invalidComponentMessage } from "./serverErrors";
@@ -76,6 +77,8 @@ import type {
   FixPositionsEvent,
   FlipEvent,
   MoveEvent,
+  ViewEvent,
+  FollowedEvent,
   PickEvent,
   ReleaseEvent,
   RollEvent,
@@ -96,6 +99,7 @@ import type {
 } from "./types";
 import { getSocket } from "./ws/wsClient";
 import { ChatPanel } from "./chat";
+import { showDisconnectedPopup, startIdleWatch } from "./idle";
 
 const MIN_ZOOM = 0.2;
 const MAX_ZOOM = 3.0;
@@ -221,6 +225,16 @@ function updateParticipants(received: SessionParticipant[] | undefined): void {
   // an older Tourtoirac does not send the list: what is shown stays as it is
   if (!Array.isArray(received)) return;
   participants = received;
+  // a followed player who left the game or the table is no longer followed,
+  // even once back
+  if (
+    followedPlayer !== null &&
+    !received.some(
+      (entry) => entry.role === "player" && entry.nickname === followedPlayer && entry.connected,
+    )
+  ) {
+    stopFollowing();
+  }
   renderParticipants();
   updateChatPartners();
   // the players the hand can be shown to are those of that list
@@ -293,8 +307,16 @@ function renderParticipants(): void {
   participantsList.replaceChildren(
     ...ordered.map((entry) => {
       const line = document.createElement("li");
-      // with private hands, each player has a hand: an icon before its name
-      if (privateHandEnabled && entry.role === "player") {
+      // the game gives each player its own image (player_icons): it takes the
+      // place of the hand icon
+      if (entry.role === "player" && entry.icon) {
+        const icon = document.createElement("img");
+        icon.className = "player-icon";
+        icon.src = entry.icon;
+        icon.alt = "";
+        line.append(icon);
+      } else if (privateHandEnabled && entry.role === "player") {
+        // with private hands, each player has a hand: an icon before its name
         const icon = document.createElement("span");
         icon.className = "hand-icon";
         icon.innerHTML = handCardsIcon;
@@ -313,6 +335,10 @@ function renderParticipants(): void {
       name.className = "participant-name";
       name.textContent = entry.nickname;
       line.append(name);
+      // the eye next to another player follows its view
+      if (entry.nickname !== me && entry.role === "player") {
+        line.append(followEyeButton(entry.nickname));
+      }
       line.title = entry.nickname;
       line.dataset.nickname = entry.nickname;
       line.classList.add(entry.role === "watcher" ? "watcher" : "player");
@@ -1038,7 +1064,7 @@ function loadComponents(components: SessionComponents | undefined): void {
 
   decksById.clear();
   decks = (components?.fixed ?? [])
-    .filter((item) => item.kind === "deck" || item.kind === "stack")
+    .filter((item) => item.kind === "deck" || item.kind === "stack" || item.kind === "slot")
     .map((item) => createDeck(item as DeckItem));
   for (const deck of decks) {
     decksById.set(deck.name, deck);
@@ -1556,8 +1582,9 @@ let fixPositionsEnabled = true;
 let screenCaptureEnabled = true;
 let hasDocuments = false;
 
-// The documents of the game (PDF files) are listed in a select on the left of
-// the bar, under a first "Consulter" entry that only serves as a label.
+// The documents of the game (PDF files) are listed in a select at the top of
+// the participants panel, under a first "Consulter" entry that only serves as
+// a label.
 function setupDocuments(documents: SessionDocument[]): void {
   hasDocuments = documents.length > 0;
   if (!documentsSelect) return;
@@ -1595,7 +1622,7 @@ function updateOptionsBar(): void {
   if (screenshotLink) screenshotLink.hidden = !screenCaptureEnabled;
   updateScreenshotAvailability();
   if (documentsSelect) documentsSelect.hidden = !hasDocuments;
-  if (optionsBar) optionsBar.hidden = !showFix && !screenCaptureEnabled && !hasDocuments;
+  if (optionsBar) optionsBar.hidden = !showFix && !screenCaptureEnabled;
 }
 
 // A capture shows the table, not a move in progress: the button is off while
@@ -1648,6 +1675,128 @@ function centerCameraOn(counter: Counter): void {
   const [dx, dy] = displayTopLeft(counter.x, counter.y, counter.width, counter.height);
   cameraX = dx + counter.width / 2 - canvas.width / (2 * zoom);
   cameraY = dy + counter.height / 2 - canvas.height / (2 * zoom);
+}
+
+// -------------------------------------------------
+// Following the view of another player
+// -------------------------------------------------
+// Each player tells the server the center of its view, while somebody
+// follows it. The eye next to the
+// name of another player centers the reader's view on that player's, until
+// the eye is clicked again: meanwhile the camera only zooms, with the wheel.
+// The center travels in logical coordinates, as a flipped board does not read
+// the same on both screens.
+
+// at most one view message per interval, and only when the view changed
+const VIEW_SEND_INTERVAL_MS = 50;
+// The follower's camera glides toward the last center received instead of
+// jumping to it: each frame it covers the share of the gap that this time
+// constant gives, whatever the frame rate. Short enough to stay close behind
+// the followed player, long enough to bridge two view messages.
+const FOLLOW_SMOOTHING_S = 0.08;
+
+let followedPlayer: string | null = null;
+// where the followed player looks; null until the server tells it
+let followedView: [number, number] | null = null;
+// the center the follower's camera shows, in logical coordinates: it trails
+// followedView; null until the first view, which is shown at once
+let followShown: [number, number] | null = null;
+// who follows the view of the reader: it is only sent while somebody does,
+// and none of them can be followed back
+let followers: string[] = [];
+let lastSentView: [number, number] | null = null;
+let lastViewSentAt = 0;
+
+function applyFollowed(received: string[] | undefined): void {
+  followers = Array.isArray(received) ? received : [];
+  // a new follower is sent the view at once, even unchanged
+  lastSentView = null;
+  lastViewSentAt = 0;
+  // the eye of a follower is turned off, the others on
+  renderParticipants();
+}
+
+function sendView(now: number): void {
+  if (followers.length === 0 || isWatcher || isClosed || !cameraInitialized) return;
+  if (now - lastViewSentAt < VIEW_SEND_INTERVAL_MS) return;
+  const [wx, wy] = screenToWorld(canvas.width / 2, canvas.height / 2);
+  const [lx, ly] = flipPoint(wx, wy);
+  const x = Math.round(lx);
+  const y = Math.round(ly);
+  if (lastSentView !== null && lastSentView[0] === x && lastSentView[1] === y) return;
+  const socket = getSocket();
+  if (!socket) return;
+  socket.send({ action: "view", x, y });
+  lastSentView = [x, y];
+  lastViewSentAt = now;
+}
+
+// keeps the center of the view on the followed one, whatever the zoom
+function followView(dt: number): void {
+  if (followedPlayer === null || followedView === null) {
+    followShown = null;
+    return;
+  }
+  if (followShown === null) {
+    followShown = [followedView[0], followedView[1]];
+  } else {
+    const step = 1 - Math.exp(-dt / FOLLOW_SMOOTHING_S);
+    followShown = [
+      followShown[0] + (followedView[0] - followShown[0]) * step,
+      followShown[1] + (followedView[1] - followShown[1]) * step,
+    ];
+  }
+  const [dx, dy] = flipPoint(followShown[0], followShown[1]);
+  cameraX = dx - canvas.width / (2 * zoom);
+  cameraY = dy - canvas.height / (2 * zoom);
+}
+
+function applyView(message: ViewEvent): void {
+  if (message.nickname !== followedPlayer) return;
+  followedView = [message.x, message.y];
+}
+
+function stopFollowing(): void {
+  if (followedPlayer === null) return;
+  followedPlayer = null;
+  followedView = null;
+  getSocket()?.send({ action: "follow", nickname: null });
+}
+
+function toggleFollow(nickname: string): void {
+  if (followedPlayer === nickname) {
+    stopFollowing();
+  } else {
+    followedPlayer = nickname;
+    followedView = null;
+    // the server answers at once with the last view of that player
+    getSocket()?.send({ action: "follow", nickname });
+  }
+  renderParticipants();
+}
+
+function followEyeButton(nickname: string): HTMLButtonElement {
+  const button = document.createElement("button");
+  button.type = "button";
+  button.className = "follow-eye";
+  button.innerHTML = eyeIcon;
+  const active = followedPlayer === nickname;
+  button.classList.toggle("active", active);
+  // two players never follow each other: the server would refuse it
+  const followsReader = followers.includes(nickname);
+  button.disabled = followsReader;
+  if (followsReader) {
+    button.title = `${nickname} suit déjà ta vue`;
+  } else {
+    button.title = active ? "Reprendre le contrôle de la caméra" : `Suivre la vue de ${nickname}`;
+  }
+  // the line may be dragged by the owner: the eye only toggles the following
+  button.draggable = false;
+  button.addEventListener("click", (event) => {
+    event.stopPropagation();
+    toggleFollow(nickname);
+  });
+  return button;
 }
 
 // -------------------------------------------------
@@ -1713,6 +1862,8 @@ function edgeScrollVector(): [number, number] {
 // avec la main vide ne doit pas secouer des pions que personne ne tient.
 function stepEdgeScroll(dt: number): void {
   if (!borderShiftEnabled || !edgeScrolling()) return;
+  // the view of the followed player moves the camera
+  if (followedPlayer !== null) return;
 
   const [vx, vy] = edgeScrollVector();
   if (vx === 0 && vy === 0) return;
@@ -2094,7 +2245,7 @@ function requestPick(bag: Bag, x: number, y: number): void {
   if (bag.content.length === 0) return;
   // the server only draws among the tokens this player may take
   if (!bag.content.some(canAcquire)) {
-    counterInfoText = "Aucun pion de votre nationalité dans ce sac";
+    showInfoMessage("Aucun pion de votre nationalité dans ce sac");
     return;
   }
   if (!isStarted) {
@@ -2177,7 +2328,7 @@ function dealPlayers(): number | null {
 // with the deck.
 function requestDeckAction(button: DeckButton): void {
   if (!button.enabled) {
-    counterInfoText = "Pas assez de cartes pour en donner une à chaque joueur";
+    showInfoMessage("Pas assez de cartes pour en donner une à chaque joueur");
     return;
   }
   if (!isStarted) {
@@ -2204,7 +2355,7 @@ function applyDeckEvent(message: DeckEvent): void {
     message.event === "refill"
       ? "a remis la défausse dans la pioche"
       : `a mélangé ${message.pile === "discard" ? "la défausse" : "la pioche"}`;
-  counterInfoText = `${who} ${what}`;
+  showInfoMessage(`${who} ${what}`);
 }
 
 // A stack dealt one card to each player: every screen reads the stack and the
@@ -2224,7 +2375,7 @@ function applyDeal(message: DealEvent): void {
     if (!myHand.includes(counter)) myHand.push(counter);
   }
   renderPrivateHand();
-  counterInfoText = `${message.nickname ?? "Un joueur"} a distribué une carte à chaque joueur`;
+  showInfoMessage(`${message.nickname ?? "Un joueur"} a distribué une carte à chaque joueur`);
 }
 
 // A token came out of a bag, of a deck or of the private hand of a player,
@@ -2316,7 +2467,22 @@ let lastMouseX = 0;
 let lastMouseY = 0;
 // the camera follows the pointer while the right button is held down
 let panning = false;
+// the id and the position of the token in hand or just released: it stays in
+// the info bar, and only when the game shows the ids (counterPositionText,
+// handInfoText)
 let counterInfoText = "";
+
+// Any other message of the info bar shows over it, and the bar goes away
+// INFO_MESSAGE_MS after the last one, back to the position of the token if
+// the game shows the ids.
+const INFO_MESSAGE_MS = 5000;
+let infoMessage = "";
+let infoMessageUntil = 0;
+
+function showInfoMessage(text: string): void {
+  infoMessage = text;
+  infoMessageUntil = performance.now() + INFO_MESSAGE_MS;
+}
 
 // options.component_id_display of the game: false hides the name and the
 // position of the tokens in the info bar. Absent, they are shown as before.
@@ -2395,9 +2561,11 @@ function applyCounterValue(message: CounterValueEvent): void {
 // Returns true when the action must not be sent; the player is told why.
 function characterRefused(character: MwCharacter): boolean {
   if (character.nationality !== null && character.nationality !== myNationality) {
-    counterInfoText = showComponentId
-      ? `${character.name}  réservé à ${character.nationality}`
-      : `Carte réservée à ${character.nationality}`;
+    showInfoMessage(
+      showComponentId
+        ? `${character.name}  réservé à ${character.nationality}`
+        : `Carte réservée à ${character.nationality}`,
+    );
     return true;
   }
   if (!isStarted) {
@@ -2595,9 +2763,11 @@ function modificationRefused(counter: Counter): boolean {
     // said in the info bar rather than in a window: a click on a token of
     // another side is common on a crowded map
     // the refusal is always said; the name of the token only when the game shows it
-    counterInfoText = showComponentId
-      ? `${counter.name}  réservé à ${counter.nationality}`
-      : `Pion réservé à ${counter.nationality}`;
+    showInfoMessage(
+      showComponentId
+        ? `${counter.name}  réservé à ${counter.nationality}`
+        : `Pion réservé à ${counter.nationality}`,
+    );
     return true;
   }
   if (!isStarted) {
@@ -2727,6 +2897,8 @@ function onMouseDown(event: MouseEvent): void {
   // the right button only moves the camera, whatever lies under the pointer,
   // and even with counters in hand: they follow the pointer again afterwards
   if (event.button === MOUSE_RIGHT) {
+    // the view of the followed player moves the camera
+    if (followedPlayer !== null) return;
     panning = true;
     lastMouseX = sx;
     lastMouseY = sy;
@@ -2895,7 +3067,7 @@ function onMouseDown(event: MouseEvent): void {
         armedDrawScreenX = sx;
         armedDrawScreenY = sy;
       } else {
-        counterInfoText = `Il reste moins de ${drawButton.count} cartes`;
+        showInfoMessage(`Il reste moins de ${drawButton.count} cartes`);
       }
       return;
     }
@@ -3436,8 +3608,9 @@ function onDoubleClick(event: MouseEvent): void {
 function onMouseWheel(event: WheelEvent): void {
   event.preventDefault();
 
-  const mx = event.offsetX;
-  const my = event.offsetY;
+  // while following a view, the zoom keeps its center in the middle
+  const mx = followedPlayer === null ? event.offsetX : canvas.width / 2;
+  const my = followedPlayer === null ? event.offsetY : canvas.height / 2;
   const [wx, wy] = screenToWorld(mx, my);
 
   zoom *= event.deltaY < 0 ? ZOOM_FACTOR : 1 / ZOOM_FACTOR;
@@ -3600,13 +3773,15 @@ function draw(): void {
   drawStackPreview();
   drawCharacterPreview();
 
-  // barre d'info (écran) : nom + position du pion
-  if (counterInfoText) {
+  // barre d'info (écran) : un message pendant INFO_MESSAGE_MS, sinon nom +
+  // position du pion quand le jeu affiche les id
+  const infoText = performance.now() < infoMessageUntil ? infoMessage : counterInfoText;
+  if (infoText) {
     ctx.fillStyle = "black";
     ctx.fillRect(0, 0, canvas.width, 28);
     ctx.fillStyle = "white";
     ctx.font = "bold 16px monospace";
-    ctx.fillText(counterInfoText, 10, 20);
+    ctx.fillText(infoText, 10, 20);
   }
 
   // grid calibration: pointer position relative to the board, bottom left
@@ -3628,7 +3803,7 @@ function handleServerMessage(raw: unknown): void {
   if (!data || typeof data !== "object") return;
 
   // the WebRTC messages relayed between players are many and long: not logged
-  if (data.event !== "voice_signal") console.log("[WS] Message reçu :", JSON.stringify(data));
+  if (data.event !== "voice_signal" && data.event !== "view") console.log("[WS] Message reçu :", JSON.stringify(data));
 
   try {
     if (data.event === "acquire" || data.event === "release") {
@@ -3673,6 +3848,10 @@ function handleServerMessage(raw: unknown): void {
       applyGive(data as unknown as GiveEvent);
     } else if (data.event === "show") {
       applyShow(data as unknown as ShowEvent);
+    } else if (data.event === "followed") {
+      applyFollowed((data as unknown as FollowedEvent).followers);
+    } else if (data.event === "view") {
+      applyView(data as unknown as ViewEvent);
     } else if (data.event === "move") {
       applyRemoteMove(data as unknown as MoveEvent);
     } else if (data.event === "roll") {
@@ -4077,6 +4256,10 @@ function handleSessionEvent(data: GameServerMessage): void {
   }
   if (typeof session.started === "boolean") isStarted = session.started;
   if (Array.isArray(session.missing_players)) missingPlayers = session.missing_players;
+  // a session joined again after a disconnection: the new connection follows
+  // nobody, and the reader gets its camera back
+  followedPlayer = null;
+  followedView = null;
   updateParticipants(session.participants);
   chat?.setHistory(session.chat);
   updateLeaveLinks();
@@ -4084,6 +4267,8 @@ function handleSessionEvent(data: GameServerMessage): void {
   // connection, outside the voice channel, and the reader calls back
   voice.setMembers(session.voice);
   voice.rejoin();
+  // the new connection has told no view yet
+  applyFollowed(session.followers);
   updateVoiceControls();
 
   currentSession = session;
@@ -4493,11 +4678,28 @@ if (screenshotLink) {
   });
 }
 
+// The stored session only starts loading the pictures, behind the loading
+// overlay: it is a snapshot of the last session message, older than the setup
+// and every move since. The situation shown is the one the answer to
+// resume_session brings, which componentsLoaded, still false, lets through.
 loadComponents(currentSession?.components);
 setupOptionsBar(currentSession);
-// une session déjà connue est resynchronisée par le resume_session, pas par un
-// nouveau chargement de la situation
-componentsLoaded = currentSession?.key !== undefined;
+
+// set once the player was disconnected for inactivity: the page no longer
+// takes its seat back when the shared WebSocket reconnects
+let idleDisconnected = false;
+
+// A player who does nothing for too long leaves the game: the WebSocket is
+// closed, so the server takes the player out of the session, as when the tab
+// is closed. The seat stays: the player may come back later.
+function disconnectForInactivity(): void {
+  idleDisconnected = true;
+  voice.leave();
+  updateVoiceControls();
+  clearPending();
+  getSocket()?.drop();
+  showDisconnectedPopup(() => window.location.reload(), goToLobby);
+}
 
 // The connection is only opened by the one game page of this browser: a
 // second one would speak for the first on the shared WebSocket (see gameLock.ts).
@@ -4511,6 +4713,9 @@ function startConnection(): void {
       clearPending();
       return;
     }
+    // disconnected for inactivity: the WebSocket reconnects for the other
+    // tabs, this page stays out of the session
+    if (idleDisconnected) return;
     // le lobby et le jeu sont deux pages distinctes : le jeu ouvre sa propre
     // connexion, qui doit revendiquer la session avant tout acquire/move.
     if (currentSession?.key) {
@@ -4531,6 +4736,13 @@ function startConnection(): void {
 void acquireGameLock().then((acquired) => {
   if (acquired) {
     startConnection();
+    // only the players of a started game are watched: a watcher, or a closed
+    // game, holds no seat, and a player waiting for the others is not idle
+    startIdleWatch({
+      moveTarget: canvas,
+      isWatched: () => isStarted && !isWatcher && !isClosed,
+      onDisconnect: disconnectForInactivity,
+    });
     return;
   }
   // The overlay stays up with the reason: this page never talks to the server.
@@ -4553,7 +4765,9 @@ function gameLoop(): void {
   lastFrameAt = now;
 
   stepEdgeScroll(dt);
+  followView(dt);
   draw();
+  sendView(now);
   updateScreenshotAvailability();
   updateLoadingOverlay();
   flushMoves();

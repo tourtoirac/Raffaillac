@@ -149,6 +149,12 @@ export interface CounterItem {
   font_color?: string;
   /** la valeur affichée ; absente d'un jeu qui l'omet, le compteur vaut 0 */
   value?: number;
+  /** optional label drawn above the value, in its color; at most two lines joined by "\n" */
+  text?: string | null;
+  /** color of the optional frame around the counter; null or absent, no frame */
+  border?: string | null;
+  /** thickness of the frame, in world pixels */
+  border_width?: number;
   /**
    * borne basse de la valeur. Absente ou null : le compteur peut descendre
    * sans fin, jusqu'aux nombres negatifs s'il le faut. Sinon le serveur refuse
@@ -230,9 +236,12 @@ export interface DeckPileItem {
  *
  * A "stack" is a deck of one single pile that deals its cards: its width and
  * height are those of the area the cards are centered in, not of a card.
+ *
+ * A "slot" is drawn like a stack, but the cards keep the side they are put
+ * down on, and it has neither Shuffle, Deal nor multi-draw button.
  */
 export interface DeckItem {
-  kind: "deck" | "stack";
+  kind: "deck" | "stack" | "slot";
   id: string;
   type: "single" | "duo";
   x: number;
@@ -248,6 +257,11 @@ export interface DeckItem {
    * older Tourtoirac: the default buttons.
    */
   card_pickup_quantity?: number[];
+  /**
+   * the piles that show the multi-draw buttons. Absent from an older
+   * Tourtoirac: every pile.
+   */
+  card_pickup_piles?: string[];
   /**
    * angle the piles are turned by around their center: 0, 90, 180 or 270.
    * Absent from an older Tourtoirac: upright.
@@ -388,6 +402,8 @@ export interface Session {
   voice?: string[];
   /** the chat messages the reader may read, oldest first (absent from an older Tourtoirac) */
   chat?: ChatMessage[];
+  /** the nicknames of the readers who follow the view of the reader */
+  followers?: string[];
 }
 
 /** a message of the chat: general when "to" is null, else private between two players */
@@ -501,6 +517,8 @@ export interface SessionParticipant {
   role: "player" | "watcher";
   /** false: a player who has a seat but is not at the table */
   connected: boolean;
+  /** the image before the name of a player (player_icons of the game); null or absent, none */
+  icon?: string | null;
 }
 
 export interface SessionPlayer {
@@ -789,6 +807,22 @@ export interface MarkEvent {
   index: number;
   value: number;
   nickname: string;
+}
+
+/** the center of the view of a followed player, in logical world coordinates */
+export interface ViewEvent {
+  event: "view";
+  nickname: string;
+  x: number;
+  y: number;
+}
+
+/** somebody starts following the view of the reader, or nobody does any more */
+export interface FollowedEvent {
+  event: "followed";
+  followed: boolean;
+  /** who follows the view of the reader */
+  followers?: string[];
 }
 
 // nouvelle position d'un composant, reçue des autres joueurs de la session
