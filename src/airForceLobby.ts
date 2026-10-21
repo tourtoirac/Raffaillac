@@ -29,6 +29,7 @@ interface AirForceGame {
   scenario_name: string;
   status: "waiting" | "playing" | "finished";
   turn: number;
+  max_turns: number | null; // null: no limit
   planes_per_side: number;
   allows_watchers: boolean;
   has_access_key: boolean;
@@ -50,6 +51,8 @@ interface Catalog {
     min_planes: number;
     max_planes: number;
     default_planes: number;
+    max_turns: number; // default length
+    turn_options?: (number | null)[]; // null: no limit
     sides: CatalogSide[];
   }[];
 }
@@ -254,6 +257,15 @@ function openCreateModal(): void {
     }),
     String(scenario.default_planes),
   );
+  const turns = selectField(
+    "turns",
+    "Nombre de tours",
+    (scenario.turn_options ?? [scenario.max_turns]).map((t) => ({
+      value: t === null ? "" : String(t),
+      label: t === null ? "Sans limite" : String(t),
+    })),
+    String(scenario.max_turns),
+  );
   side.input.onchange = () => {
     const chosen = scenario.sides.find((s) => s.key === side.input.value);
     const select = aircraft.input as HTMLSelectElement;
@@ -275,6 +287,7 @@ function openCreateModal(): void {
       side,
       aircraft,
       planes,
+      turns,
       textField("access_key", "Clé d'accès au jeu (optionnel)", "Clé d'accès au jeu"),
     ],
     "Créer",
@@ -289,6 +302,7 @@ function openCreateModal(): void {
           side: v.side,
           aircraft: v.aircraft,
           planes_per_side: Number(v.planes),
+          max_turns: v.turns ? Number(v.turns) : null,
         }),
       );
     },
@@ -355,7 +369,8 @@ export function renderAirForceTab(container: HTMLDivElement): void {
       const row = document.createElement("tr");
       const codeCell = document.createElement("td");
       codeCell.textContent = game.code;
-      codeCell.title = `${game.scenario_name}, ${game.planes_per_side} avion(s) par camp` +
+      const length = game.max_turns === null ? "sans limite de tours" : `${game.max_turns} tours`;
+      codeCell.title = `${game.scenario_name}, ${game.planes_per_side} avion(s) par camp, ${length}` +
         (game.status === "playing" ? `, tour ${game.turn}` : "");
 
       const playersCell = document.createElement("td");
