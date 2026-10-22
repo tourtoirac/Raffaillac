@@ -5,6 +5,9 @@
 // page. As everywhere in OBG there is no account: a nickname, an optional
 // personal key to take one's seat back, an optional access key for the game.
 
+import { emptyListMessage, matchesSearch } from "./sessionList";
+import type { Pager } from "./sessionList";
+
 export const AIR_FORCE_TAB = "air_force";
 export const AIR_FORCE_LABEL = "Air Force";
 
@@ -13,7 +16,7 @@ const HAUTEFORT = new URL("hautefort/", new URL(import.meta.env.BASE_URL, window
 // seat tokens, read back by the Hautefort game page (same origin, same tab)
 const SEATS_KEY = "hautefort_seats";
 
-interface AirForcePlayer {
+export interface AirForcePlayer {
   nickname: string;
   side: string;
   side_name: string;
@@ -23,7 +26,7 @@ interface AirForcePlayer {
   has_key: boolean;
 }
 
-interface AirForceGame {
+export interface AirForceGame {
   id: string;
   code: string;
   scenario_name: string;
@@ -72,6 +75,15 @@ let rerender: () => void = () => {};
 
 export function airForceAvailable(): boolean {
   return connected;
+}
+
+// the games Hautefort lists (not finished, not archived)
+export function airForceGames(): readonly AirForceGame[] {
+  return games;
+}
+
+export function airForceMatches(game: AirForceGame, query: string): boolean {
+  return matchesSearch(query, game.code, game.players.map((p) => p.nickname));
 }
 
 // -------------------------------------------------
@@ -351,8 +363,14 @@ function openJoinModal(game: AirForceGame, role: "player" | "watcher", nickname 
 // Tab content
 // -------------------------------------------------
 
-export function renderAirForceTab(container: HTMLDivElement): void {
-  if (games.length > 0) {
+export function renderAirForceTab(
+  container: HTMLDivElement,
+  query: string,
+  pager: Pager,
+  lockWhenFull: (button: HTMLButtonElement) => HTMLButtonElement,
+): void {
+  const shown = games.filter((game) => airForceMatches(game, query));
+  if (shown.length > 0) {
     const table = document.createElement("table");
     table.innerHTML = `
       <thead>
@@ -365,7 +383,7 @@ export function renderAirForceTab(container: HTMLDivElement): void {
       <tbody></tbody>
     `;
     const tbody = table.querySelector("tbody") as HTMLTableSectionElement;
-    for (const game of games) {
+    for (const game of pager.slice(AIR_FORCE_TAB, shown)) {
       const row = document.createElement("tr");
       const codeCell = document.createElement("td");
       codeCell.textContent = game.code;
@@ -399,28 +417,27 @@ export function renderAirForceTab(container: HTMLDivElement): void {
         joinBtn.className = "join-session-btn";
         joinBtn.textContent = "Join";
         joinBtn.onclick = () => openJoinModal(game, "player");
-        actionCell.appendChild(joinBtn);
+        actionCell.appendChild(lockWhenFull(joinBtn));
       }
       if (game.allows_watchers) {
         const watchBtn = document.createElement("button");
         watchBtn.className = "watch-session-btn";
         watchBtn.textContent = "Spectateur";
         watchBtn.onclick = () => openJoinModal(game, "watcher");
-        actionCell.appendChild(watchBtn);
+        actionCell.appendChild(lockWhenFull(watchBtn));
       }
       row.append(codeCell, playersCell, actionCell);
       tbody.appendChild(row);
     }
     container.appendChild(table);
+    const controls = pager.controls(AIR_FORCE_TAB, shown.length);
+    if (controls) container.appendChild(controls);
   } else {
-    const empty = document.createElement("p");
-    empty.textContent = "Aucune session active.";
-    empty.style.color = "#888";
-    container.appendChild(empty);
+    container.appendChild(emptyListMessage(query));
   }
   const createBtn = document.createElement("button");
   createBtn.textContent = "Create";
   createBtn.className = "create-game-btn";
   createBtn.onclick = openCreateModal;
-  container.appendChild(createBtn);
+  container.appendChild(lockWhenFull(createBtn));
 }

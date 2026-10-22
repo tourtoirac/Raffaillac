@@ -28,6 +28,8 @@ export class ChatPanel {
   private current = GENERAL;
   private readonly unread = new Map<string, number>();
   private collapsed = false;
+  /** false for a watcher: reads the general channel, writes nothing */
+  private writable = true;
 
   private readonly tabs: HTMLElement;
   private readonly log: HTMLElement;
@@ -80,6 +82,14 @@ export class ChatPanel {
     this.render();
   }
 
+  /** Whether the reader may write: a watcher only reads. */
+  setWritable(writable: boolean): void {
+    if (writable === this.writable) return;
+    this.writable = writable;
+    this.form.hidden = !writable;
+    if (!writable) this.input.value = "";
+  }
+
   /** A message the server just sent: the reader may read it. */
   receive(message: ChatMessage): void {
     if (this.messages.has(message.id)) return;
@@ -100,7 +110,7 @@ export class ChatPanel {
 
   private sendTyped(): void {
     const text = this.input.value.trim();
-    if (!text) return;
+    if (!text || !this.writable) return;
     const message: Record<string, unknown> = { action: "chat_send", text };
     if (this.current !== GENERAL) message.to = this.current;
     this.host.send(message);
@@ -111,7 +121,7 @@ export class ChatPanel {
     this.current = channel;
     this.unread.delete(channel);
     this.render();
-    this.input.focus();
+    if (this.writable) this.input.focus();
   }
 
   private setCollapsed(collapsed: boolean): void {

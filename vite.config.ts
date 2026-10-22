@@ -16,6 +16,7 @@ export default defineConfig({
       input: {
         index: resolve(import.meta.dirname, "index.html"),
         game: resolve(import.meta.dirname, "game.html"),
+        parties: resolve(import.meta.dirname, "parties.html"),
       },
     },
   },

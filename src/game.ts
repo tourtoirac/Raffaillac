@@ -50,7 +50,7 @@ import handCardsIcon from "../../Common/resources/hand_cards.svg?raw";
 import eyeIcon from "../../Common/resources/eye.svg?raw";
 import { lobbyReturnUrl, originGameName } from "./navigation";
 import { acquireGameLock, GAME_OPEN_ELSEWHERE_MESSAGE } from "./gameLock";
-import { invalidComponentMessage } from "./serverErrors";
+import { invalidComponentMessage, serverFullMessage } from "./serverErrors";
 import { clearSession, loadPlayerIdentity, loadSession, storeSession } from "./session";
 import type {
   AcquireEvent,
@@ -79,6 +79,9 @@ import type {
   MoveEvent,
   ViewEvent,
   FollowedEvent,
+  GenerateEvent,
+  GeneratorItem,
+  GeneratorModel,
   PickEvent,
   ReleaseEvent,
   RollEvent,
@@ -99,7 +102,7 @@ import type {
 } from "./types";
 import { getSocket } from "./ws/wsClient";
 import { ChatPanel } from "./chat";
-import { showDisconnectedPopup, startIdleWatch } from "./idle";
+import { IDLE_WARNING_MS, WATCHER_IDLE_WARNING_MS, showDisconnectedPopup, startIdleWatch } from "./idle";
 
 const MIN_ZOOM = 0.2;
 const MAX_ZOOM = 3.0;
@@ -150,6 +153,13 @@ const CHARACTER_PREVIEW_CARD_HEIGHT = 220;
 // d'écran, donc independent du zoom : c'est la distance au bord de la fenêtre
 // que le joueur garde, pas une distance dans le monde.
 const EDGE_BAND = 90;
+
+// A panel between the table and the edge of the page — the private hand
+// below, the participants on the right — moves that edge: the camera only
+// scrolls with the pointer against the edge of the page, beyond the panel, in
+// this narrower band. Carrying a card down to the hand or onto the name of a
+// player then crosses no band.
+const EDGE_PANEL_BAND = 24;
 
 // La vitesse est nulle au bord exact de la bande et maximale à celui de
 // l'écran : un dégradé, pour que le franchissement soit doux plutôt que
@@ -391,10 +401,12 @@ const chat = chatPanelElement
     })
   : null;
 
-// the private tabs follow the players of the game; a watcher has none
+// the private tabs follow the players of the game; a watcher has none and
+// only reads the general channel
 function updateChatPartners(): void {
   const players = participants.filter((entry) => entry.role === "player").map((entry) => entry.nickname);
   chat?.setPartners(players, !isWatcher);
+  chat?.setWritable(!isWatcher);
 }
 
 // -------------------------------------------------
@@ -591,8 +603,13 @@ const handZoom = document.getElementById("hand-zoom") as HTMLImageElement | null
 
 // The picture is shown 1:1, one pixel of the file for one pixel of the page,
 // and only shrunk when the page is too small to hold it above the pointer.
-function showHandZoom(source: HTMLImageElement, event: MouseEvent): void {
+// The element the picture is shown on the left of, instead of above the
+// pointer: the column of the generators, which runs down the whole page.
+let handZoomBeside: HTMLElement | null = null;
+
+function showHandZoom(source: HTMLImageElement, event: MouseEvent, beside: HTMLElement | null = null): void {
   if (!handZoom || source.naturalWidth === 0) return;
+  handZoomBeside = beside;
   handZoom.src = source.src;
   handZoom.dataset.naturalWidth = String(source.naturalWidth);
   handZoom.dataset.naturalHeight = String(source.naturalHeight);
@@ -605,6 +622,25 @@ function placeHandZoom(event: MouseEvent): void {
   const naturalWidth = Number(handZoom.dataset.naturalWidth);
   const naturalHeight = Number(handZoom.dataset.naturalHeight);
   if (!(naturalWidth > 0) || !(naturalHeight > 0)) return;
+  if (handZoomBeside !== null) {
+    // on the left of the column, centered on the pointer: its size depends
+    // on the page only, not on how far down the pointer is
+    const column = handZoomBeside.getBoundingClientRect();
+    const roomWidth = Math.max(1, column.left - 2 * HAND_ZOOM_GAP);
+    const roomHeight = Math.max(1, window.innerHeight - 2 * HAND_ZOOM_GAP);
+    const scale = Math.min(1, roomHeight / naturalHeight, roomWidth / naturalWidth);
+    const width = naturalWidth * scale;
+    const height = naturalHeight * scale;
+    const top = Math.min(
+      Math.max(HAND_ZOOM_GAP, event.clientY - height / 2),
+      window.innerHeight - height - HAND_ZOOM_GAP,
+    );
+    handZoom.style.width = `${width}px`;
+    handZoom.style.height = `${height}px`;
+    handZoom.style.left = `${column.left - HAND_ZOOM_GAP - width}px`;
+    handZoom.style.top = `${top}px`;
+    return;
+  }
   // the room above the pointer and across the page
   const roomHeight = Math.max(1, event.clientY - 2 * HAND_ZOOM_GAP);
   const roomWidth = Math.max(1, window.innerWidth - 2 * HAND_ZOOM_GAP);
@@ -861,6 +897,99 @@ function overPrivateHand(clientX: number, clientY: number): boolean {
   return clientX >= box.left && clientX <= box.right && clientY >= box.top && clientY <= box.bottom;
 }
 
+// -------------------------------------------------
+// Generators
+// -------------------------------------------------
+// A generator is not drawn on the table: its models are shown in a column on
+// the left of the participants, each on the face the game gives it. The left
+// button going down on a model and the pointer reaching the table create a
+// new copy, in the hand of the player. A copy released over the column is
+// destroyed.
+
+const generatorsPanel = document.getElementById("generators");
+let generators: GeneratorItem[] = [];
+// The model the left button went down on. The copy is only asked for once the
+// pointer reaches the table: a simple click creates nothing.
+let armedModel: { generator: GeneratorItem; model: GeneratorModel } | null = null;
+
+function renderGenerators(): void {
+  if (!generatorsPanel) return;
+  const items = generators.flatMap((generator) =>
+    generator.components.map((model) => {
+      const image = document.createElement("img");
+      // the server only sends the face the model shows
+      image.src = (model.side === "back" ? model.back_src : model.front_src) ?? model.front_src ?? model.back_src ?? "";
+      image.alt = "";
+      image.className = "generator-item";
+      image.draggable = false;
+      if (showComponentId) image.title = model.id;
+      // the pointer on a model shows its picture at its real size, on the
+      // left of the column
+      image.addEventListener("mouseenter", (event) => showHandZoom(image, event, generatorsPanel));
+      image.addEventListener("mousemove", (event) => placeHandZoom(event));
+      image.addEventListener("mouseleave", hideHandZoom);
+      image.addEventListener("mousedown", (event) => {
+        if (event.button !== MOUSE_LEFT) return;
+        // no text selection nor native image drag, watchers included
+        event.preventDefault();
+        // a watcher or a closed game creates nothing
+        if (isWatcher || isClosed) return;
+        hideHandZoom();
+        armedModel = { generator, model };
+      });
+      return image;
+    }),
+  );
+  generatorsPanel.replaceChildren(...items);
+  generatorsPanel.hidden = items.length === 0;
+}
+
+function overGenerators(clientX: number, clientY: number): boolean {
+  if (!generatorsPanel || generatorsPanel.hidden) return false;
+  const box = generatorsPanel.getBoundingClientRect();
+  return clientX >= box.left && clientX <= box.right && clientY >= box.top && clientY <= box.bottom;
+}
+
+// The pointer came from the column onto the table with the button down: the
+// copy is asked for, and arrives under the pointer like a token picked from a
+// bag.
+function requestGenerate(generator: GeneratorItem, model: GeneratorModel, x: number, y: number): void {
+  if (!isStarted) {
+    warnGameNotStarted();
+    return;
+  }
+  if (missingPlayers.length > 0) {
+    warnPlayersMissing();
+    return;
+  }
+  // the copy would belong to a nationality this player may not touch
+  const nationality = model.nationality ?? null;
+  if (nationality !== null && nationality !== myNationality) {
+    showInfoMessage("Ce pion appartient à une autre nationalité");
+    return;
+  }
+  const socket = getSocket();
+  if (!socket) return;
+
+  dragging = true;
+  releaseOnArrival = false;
+  grabbedName = null;
+  // two players may drag a copy out at once: the id tells this request's
+  // answer from the other player's
+  const requestId = `${Date.now()}-${Math.random().toString(36).slice(2)}`;
+  const message = {
+    action: "generate",
+    component_id: generator.id,
+    model_id: model.id,
+    x,
+    y,
+    request_id: requestId,
+  };
+  setPending("generate", generator.id, requestId);
+  socket.send(message);
+  console.log("[WS] Envoyé :", JSON.stringify(message));
+}
+
 // A token left the table for a private hand: it is no longer drawn nor
 // clickable. When the hand is the reader's, it joins the strip.
 function putInPrivateHand(counter: Counter, nickname: string): void {
@@ -1061,6 +1190,11 @@ function loadComponents(components: SessionComponents | undefined): void {
       countersById.set(counter.name, counter);
     }
   }
+
+  generators = (components?.fixed ?? [])
+    .filter((item) => item.kind === "generator")
+    .map((item) => item as GeneratorItem);
+  renderGenerators();
 
   decksById.clear();
   decks = (components?.fixed ?? [])
@@ -1806,8 +1940,37 @@ function followEyeButton(nickname: string): HTMLButtonElement {
 // Où se trouve le pointeur, en pixels d'écran. Sa position est suivie même
 // quand il n'a rien déclenché : un pointeur immobile n'émet aucun mousemove, et
 // c'est pourtant le cas le plus courant pendant un défilement.
+// edgeClientX/Y: in the page, followed over the whole page since the bands
+// may lie over a panel; edgeX/Y: the same point on the canvas, kept inside it
+let edgeClientX = -1;
+let edgeClientY = -1;
 let edgeX = -1;
 let edgeY = -1;
+
+// The area whose edges scroll the camera, in page pixels: the canvas, its
+// bottom pushed down to the bottom of the page under a private hand, and its
+// right side to the right of the page beside the participants. Each edge comes
+// with the width of its band.
+function edgeArea(): {
+  left: number;
+  top: number;
+  right: number;
+  bottom: number;
+  rightBand: number;
+  bottomBand: number;
+} {
+  const box = canvas.getBoundingClientRect();
+  const handBelow = privateHand !== null && !privateHand.hidden;
+  const panelBeside = participantsPanel !== null && !participantsPanel.hidden;
+  return {
+    left: box.left,
+    top: box.top,
+    right: panelBeside ? window.innerWidth : box.right,
+    bottom: handBelow ? window.innerHeight : box.bottom,
+    rightBand: panelBeside ? EDGE_PANEL_BAND : EDGE_BAND,
+    bottomBand: handBelow ? EDGE_PANEL_BAND : EDGE_BAND,
+  };
+}
 
 // options.border_shift of the game: only true turns the scrolling at the
 // edges of the screen on. Without it the view only moves with the right button.
@@ -1816,9 +1979,9 @@ let borderShiftEnabled = false;
 // Proximité d'un bord, en fraction de la vitesse maximale : 1 sur le bord
 // même, 0 dès qu'on en sort. On normalise par la bande, pour que la taille de
 // la fenêtre n'ait pas d'effet sur la façon dont le défilement s'enclenche.
-function edgeProximity(distance: number, extent: number): number {
+function edgeProximity(distance: number, extent: number, band = EDGE_BAND): number {
   if (extent <= 0) return 0;
-  return Math.max(0, Math.min(1, 1 - distance / Math.min(EDGE_BAND, extent / 2)));
+  return Math.max(0, Math.min(1, 1 - distance / Math.min(band, extent / 2)));
 }
 
 // Proximité du bord le plus proche sur un axe, signée : positive vers la fin de
@@ -1827,9 +1990,10 @@ function edgeProximity(distance: number, extent: number): number {
 // alors dans deux sens opposés. Les deux bords sont pesés puis on garde le plus
 // fort : dans un coin le pointeur est près des deux, et c'est le bord qu'il
 // approche qui doit décider du sens.
-function edgeSignedOnAxis(position: number, extent: number): number {
+// endBand: the band of the end of the axis, narrower beyond a panel.
+function edgeSignedOnAxis(position: number, extent: number, endBand = EDGE_BAND): number {
   const nearStart = edgeProximity(position, extent);
-  const nearEnd = edgeProximity(extent - position, extent);
+  const nearEnd = edgeProximity(extent - position, extent, endBand);
   return nearStart >= nearEnd ? -nearStart : nearEnd;
 }
 
@@ -1846,9 +2010,10 @@ function edgeSignedOnAxis(position: number, extent: number): number {
 function edgeScrollVector(): [number, number] {
   const eased = (fraction: number): number =>
     Math.sign(fraction) * Math.abs(fraction) ** EDGE_EASE * EDGE_SCROLL_SPEED;
+  const area = edgeArea();
   return [
-    eased(edgeSignedOnAxis(edgeX, canvas.width)),
-    eased(edgeSignedOnAxis(edgeY, canvas.height)),
+    eased(edgeSignedOnAxis(edgeClientX - area.left, area.right - area.left, area.rightBand)),
+    eased(edgeSignedOnAxis(edgeClientY - area.top, area.bottom - area.top, area.bottomBand)),
   ];
 }
 
@@ -1899,7 +2064,7 @@ function stepEdgeScroll(dt: number): void {
 
 let hand: Counter[] = [];
 let handAnchor: Counter | null = null;
-type PendingAction = "acquire" | "release" | "pick" | "take" | "draw";
+type PendingAction = "acquire" | "release" | "pick" | "take" | "draw" | "generate";
 // requestId: set for a pick, whose answer names the token, not the bag, and
 // for a take
 let pending: { action: PendingAction; componentId: string; requestId?: string } | null = null;
@@ -2130,7 +2295,11 @@ function applyHandEvent(answer: HandEvent, isOwnRequest: boolean, fromStack = fa
   if (answer.event === "release") {
     const release = answer as ReleaseEvent;
     setHands(release.hands);
-    if (release.hand_of) {
+    if (release.generator_id) {
+      // the copy went back to its generator: it leaves the game
+      putInBag(counter, undefined);
+      countersById.delete(counter.name);
+    } else if (release.hand_of) {
       // the holder of the hand receives the front of a card that was lying
       // on its back; the others receive nothing new
       const kept = release.component_json as Partial<TokenItem> | undefined;
@@ -2378,10 +2547,10 @@ function applyDeal(message: DealEvent): void {
   showInfoMessage(`${message.nickname ?? "Un joueur"} a distribué une carte à chaque joueur`);
 }
 
-// A token came out of a bag, of a deck or of the private hand of a player,
-// applied by every screen: it is back on the table, above the others, in the
-// mouse hand of the player who picked it.
-function applyPick(message: PickEvent | TakeEvent | DrawEvent): void {
+// A token came out of a bag, of a deck, of the private hand of a player or of
+// a generator, applied by every screen: it is back on the table, above the
+// others, in the mouse hand of the player who picked it.
+function applyPick(message: PickEvent | TakeEvent | DrawEvent | GenerateEvent): void {
   // a card of a draw of several, after the first one: `pending` is already
   // answered, the request id alone tells it is ours
   const drawIndex = message.event === "draw" ? (message.index ?? 0) : 0;
@@ -2802,6 +2971,7 @@ function requestRelease(
   toHand = false,
   pile: { deck: Deck; pile: DeckPile } | null = null,
   toPlayer: string | null = null,
+  toGenerator = false,
 ): void {
   const socket = getSocket();
   if (!socket) return;
@@ -2818,6 +2988,8 @@ function requestRelease(
     ...(toHand ? { hand: true } : {}),
     // the hand of another player, the token being released on its name
     ...(toHand && toPlayer !== null ? { to_player: toPlayer } : {}),
+    // released over the column of the generators: a copy is destroyed
+    ...(toGenerator ? { generator: true } : {}),
   };
   setPending("release", counter.name);
   socket.send(message);
@@ -2849,8 +3021,9 @@ function groupTargetPile(): { deck: Deck; pile: DeckPile } | null {
 }
 
 // The left button came up: whatever is in hand is put down where it is, or
-// kept in the private hand when the button came up over it (toHand).
-function dropHand(toHand = false, toPlayer: string | null = null): void {
+// kept in the private hand when the button came up over it (toHand), or
+// given back to the generators (toGenerator).
+function dropHand(toHand = false, toPlayer: string | null = null, toGenerator = false): void {
   cancelLongPress();
   if (!dragging) return;
   dragging = false;
@@ -2870,21 +3043,22 @@ function dropHand(toHand = false, toPlayer: string | null = null): void {
       };
     }
     // a group of cards goes into one pile together, edge cards included
-    const target = toHand ? null : groupTargetPile();
+    const target = toHand || toGenerator ? null : groupTargetPile();
     // bottom first: each release brings its token above the others, so the
     // stack keeps its order
     for (const counter of [...hand]) {
-      requestRelease(counter, toHand, target !== null && counter.isCard ? target : null, toPlayer);
+      requestRelease(counter, toHand, target !== null && counter.isCard ? target : null, toPlayer, toGenerator);
     }
     return;
   }
-  // the answer to the acquire, to the pick, to the take or to the draw is
-  // still on its way
+  // the answer to the acquire, to the pick, to the take, to the draw or to
+  // the generate is still on its way
   if (
     pending?.action === "acquire" ||
     pending?.action === "pick" ||
     pending?.action === "take" ||
-    pending?.action === "draw"
+    pending?.action === "draw" ||
+    pending?.action === "generate"
   ) {
     releaseOnArrival = true;
   }
@@ -3093,11 +3267,8 @@ function onMouseMove(event: MouseEvent): void {
   pointerScreenX = sx;
   pointerScreenY = sy;
 
-  // Le défilement de la caméra a ses propres règles de déclenchement, alors que
-  // ce gestionnaire s'interrompt dès qu'un pion est en main. Il est donc appelé
-  // avant toute sortie de fonction, et jamais à l'intérieur de la boucle de
-  // dessin, qui ignore le temps écoulé depuis le dernier mouvement.
-  trackPointerForEdgeScroll(sx, sy);
+  // the scrolling at the edges follows the pointer over the whole page:
+  // onWindowMouseMove tracks it, this move included
 
   const [wx, wy] = screenToWorld(sx, sy);
 
@@ -3133,6 +3304,16 @@ function onMouseMove(event: MouseEvent): void {
     armedHandItem = null;
     if ((event.buttons & MOUSE_LEFT_MASK) !== 0 && pending === null && hand.length === 0) {
       requestTake(played, lx, ly);
+    }
+  }
+
+  // the pointer comes from the column of the generators with the button
+  // down: a copy of the model it went down on is created here
+  if (armedModel !== null) {
+    const { generator, model } = armedModel;
+    armedModel = null;
+    if ((event.buttons & MOUSE_LEFT_MASK) !== 0 && pending === null && hand.length === 0) {
+      requestGenerate(generator, model, lx, ly);
     }
   }
 
@@ -3224,19 +3405,32 @@ function onMouseUp(event: MouseEvent): void {
       }
     }
     armedHandItem = null;
+    armedModel = null;
     armedDraw = null;
     armedCharacter = null;
     // a token carried on the table and released on the name of a player
     // joins the hand of that player
     if (receiver !== null) dropHand(true, receiver);
+    else if (overGenerators(event.clientX, event.clientY)) dropHand(false, null, true);
     else dropHand(overPrivateHand(event.clientX, event.clientY));
     privateHand?.classList.remove("drop-target");
+    generatorsPanel?.classList.remove("drop-target");
   }
 }
 
 // Listened on the window: the canvas hears nothing once the pointer is over
 // the private hand. The strip lights up while a release would keep the token.
 function onWindowMouseMove(event: MouseEvent): void {
+  // Le défilement de la caméra a ses propres règles de déclenchement : il est
+  // suivi avant toute sortie de fonction, et jamais à l'intérieur de la boucle
+  // de dessin, qui ignore le temps écoulé depuis le dernier mouvement.
+  trackPointerForEdgeScroll(event.clientX, event.clientY);
+  // the column of the generators lights up while a release would give the
+  // tokens carried back to it
+  generatorsPanel?.classList.toggle(
+    "drop-target",
+    dragging && hand.length > 0 && overGenerators(event.clientX, event.clientY),
+  );
   if (!privateHand) return;
   const carried =
     (dragging && hand.length > 0) ||
@@ -3526,13 +3720,11 @@ function drawStackCount(count: number, right: number, top: number): void {
   ctx.restore();
 }
 
-// Un pointeur qui quitte le canvas ne peut plus s'en éloigner : le seul signal
-// qu'il enverra pour arrêter est son retour. Sans cette remise à zéro, la carte
-// continuerait de défiler indéfiniment, et le joueur n'aurait plus le moyen de
-// l'arrêter autrement qu'en revenant au bord, ce qui le relance. Le défilement
-// repart au retour, avec son délai d'entrée.
+// The pointer leaving the canvas does not stop the scrolling: the bands of the
+// private hand and of the participants lie outside it, and the window keeps
+// following the pointer (onWindowMouseMove). Only leaving the page does
+// (onPageLeave).
 function onMouseLeave(): void {
-  edgeInside = false;
   pointerOnCanvas = false;
   panning = false;
 }
@@ -3562,16 +3754,29 @@ function edgeScrolling(): boolean {
   return Date.now() >= edgeArmedAt;
 }
 
-function trackPointerForEdgeScroll(sx: number, sy: number): void {
-  edgeX = sx;
-  edgeY = sy;
+// Called with the position of the pointer in the page, from the window: a
+// band may lie over the private hand or the participants, out of the canvas.
+function trackPointerForEdgeScroll(clientX: number, clientY: number): void {
+  edgeClientX = clientX;
+  edgeClientY = clientY;
+  // the hand carried along follows the point of the canvas nearest the pointer
+  const box = canvas.getBoundingClientRect();
+  edgeX = Math.max(0, Math.min(canvas.width, clientX - box.left));
+  edgeY = Math.max(0, Math.min(canvas.height, clientY - box.top));
 
   // Un pointeur pressé contre un bord ne quitte jamais la bande : la minuterie
   // ne doit donc être remise qu'à son entrée, sinon le défilement ne démarrerait
   // jamais. Le défilement s'arrête quand le pointeur s'écarte, rien d'autre.
+  // Outside the area (the header, the options bar), nothing scrolls.
+  const area = edgeArea();
+  const x = clientX - area.left;
+  const y = clientY - area.top;
+  const width = area.right - area.left;
+  const height = area.bottom - area.top;
   const inside =
-    Math.abs(edgeSignedOnAxis(sx, canvas.width)) > 0 ||
-    Math.abs(edgeSignedOnAxis(sy, canvas.height)) > 0;
+    x >= 0 && x <= width && y >= 0 && y <= height &&
+    (Math.abs(edgeSignedOnAxis(x, width, area.rightBand)) > 0 ||
+      Math.abs(edgeSignedOnAxis(y, height, area.bottomBand)) > 0);
   if (inside && !edgeInside) {
     edgeArmedAt = Date.now() + EDGE_SCROLL_DELAY_MS;
   }
@@ -3829,6 +4034,8 @@ function handleServerMessage(raw: unknown): void {
       applyPick(data as unknown as PickEvent);
     } else if (data.event === "take") {
       applyPick(data as unknown as TakeEvent);
+    } else if (data.event === "generate") {
+      applyPick(data as unknown as GenerateEvent);
     } else if (data.event === "draw") {
       applyPick(data as unknown as DrawEvent);
     } else if (data.event === "shuffle" || data.event === "refill") {
@@ -3958,6 +4165,17 @@ function reportServerError(data: ServerErrorEvent): void {
     if (code !== "session_already_started") {
       window.alert(data.error?.message ?? "La partie n'a pas pu être démarrée.");
     }
+    return;
+  }
+
+  // the platform runs its maximum number of games in progress and this one
+  // was empty: the player goes back to the lobby, the game stays as it was
+  if (code === "server_full") {
+    if (leavingDeadSession) return;
+    leavingDeadSession = true;
+    clearPending();
+    window.alert(serverFullMessage(null));
+    window.location.href = leaveUrl;
     return;
   }
 
@@ -4736,11 +4954,20 @@ function startConnection(): void {
 void acquireGameLock().then((acquired) => {
   if (acquired) {
     startConnection();
-    // only the players of a started game are watched: a watcher, or a closed
-    // game, holds no seat, and a player waiting for the others is not idle
+    // the players of a started game are watched: a closed game holds no
+    // seat, and a player waiting for the others is not idle. A watcher is
+    // only watched while no player is connected: alone, the tab is all that
+    // keeps the session loaded on the server
     startIdleWatch({
       moveTarget: canvas,
-      isWatched: () => isStarted && !isWatcher && !isClosed,
+      warningDelay: () => {
+        if (isClosed) return null;
+        if (isWatcher) {
+          const playerHere = participants.some((entry) => entry.role === "player" && entry.connected);
+          return playerHere ? null : WATCHER_IDLE_WARNING_MS;
+        }
+        return isStarted ? IDLE_WARNING_MS : null;
+      },
       onDisconnect: disconnectForInactivity,
     });
     return;
@@ -4792,6 +5019,13 @@ canvas.addEventListener("wheel", onMouseWheel, { passive: false });
 // relâchement hors du canvas
 window.addEventListener("mouseup", onMouseUp);
 window.addEventListener("mousemove", onWindowMouseMove);
+// Un pointeur qui quitte la page ne peut plus s'en éloigner : le seul signal
+// qu'il enverra pour arrêter est son retour. Sans cette remise à zéro, la carte
+// continuerait de défiler indéfiniment. Le défilement repart au retour, avec
+// son délai d'entrée.
+document.documentElement.addEventListener("mouseleave", () => {
+  edgeInside = false;
+});
 // the right button moves the camera: no context menu over the game
 canvas.addEventListener("contextmenu", (event) => event.preventDefault());
 window.addEventListener("keydown", onKeyDown);

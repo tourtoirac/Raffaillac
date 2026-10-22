@@ -1,0 +1,139 @@
+<!DOCTYPE html>
+<html lang="fr">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Parties en cours — Online Boardgames</title>
+  <style>
+    body {
+      font-family: Arial, sans-serif;
+      margin: 20px;
+      background-color: #f4f4f9;
+    }
+
+    h1 {
+      color: #333;
+    }
+
+    #back-link {
+      position: absolute;
+      top: 20px;
+      right: 20px;
+      color: #007bff;
+      font-size: 0.95em;
+      text-decoration: none;
+    }
+
+    #back-link:hover {
+      text-decoration: underline;
+    }
+
+    /* active games of the platform and their limit; red once the limit is reached */
+    #games-count {
+      color: #333;
+    }
+
+    #games-count.full {
+      color: #c0392b;
+      font-weight: bold;
+    }
+
+    #session-search {
+      width: 320px;
+      max-width: 100%;
+      padding: 8px;
+      margin-bottom: 16px;
+      border: 1px solid #ccc;
+      border-radius: 4px;
+      box-sizing: border-box;
+    }
+
+    #games-list {
+      background-color: white;
+      padding: 20px;
+      border: 1px solid #ccc;
+      border-radius: 5px;
+    }
+
+    table {
+      width: 100%;
+      border-collapse: collapse;
+    }
+
+    th, td {
+      border: 1px solid #ddd;
+      padding: 12px;
+      text-align: left;
+    }
+
+    th {
+      background-color: #f8f9fa;
+    }
+
+    tr:nth-child(even) {
+      background-color: #f9f9f9;
+    }
+
+    td a {
+      color: #007bff;
+      text-decoration: none;
+    }
+
+    td a:hover {
+      text-decoration: underline;
+    }
+
+    /* a player of the table: green while in play, as in the lobby */
+    .player {
+      display: inline-block;
+      padding: 4px 10px;
+      margin: 2px;
+      border: 1px solid #007bff;
+      background-color: #e7f1ff;
+      color: #007bff;
+      border-radius: 4px;
+      font-size: 0.9em;
+    }
+
+    .player.connected {
+      border-color: #28a745;
+      background-color: #e8f7ec;
+      color: #1d7a33;
+    }
+
+    .pager {
+      display: flex;
+      align-items: center;
+      gap: 12px;
+      margin-top: 10px;
+      color: #555;
+      font-size: 0.9em;
+    }
+
+    .pager button {
+      padding: 4px 10px;
+      border: 1px solid #ccc;
+      background-color: white;
+      border-radius: 4px;
+      cursor: pointer;
+    }
+
+    .pager button:disabled {
+      cursor: default;
+      opacity: 0.5;
+    }
+  </style>
+</head>
+<body>
+  <h1>Parties en cours</h1>
+  <a id="back-link" href="index.html">← Retour au lobby</a>
+
+  <p id="games-count"></p>
+
+  <input type="search" id="session-search" placeholder="Rechercher un code de session ou un pseudo" aria-label="Rechercher un code de session ou un pseudo" />
+
+  <div id="games-list">Chargement des parties...</div>
+
+  <script type="module" src="/src/activeGames.ts"></script>
+</body>
+</html>

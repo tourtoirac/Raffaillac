@@ -46,6 +46,8 @@ prétendre avoir couvert une régression. La seule vérification possible est
 | ------------------ | ---- |
 | `game.ts`          | Page de jeu : état, canvas, souris, messages serveur (~1 700 lignes) |
 | `lobby.ts`         | Page de lobby : onglets de jeux, tables, modales créer/rejoindre (~700 lignes) |
+| `activeGames.ts`   | Page `parties.html` (lien « Parties en cours » du lobby) : les parties en cours (au moins un joueur connecté), tous jeux confondus (Air Force compris), compteur `active_games` / `max_active_games` de `sessions_info` ; le lobby grise Create, Join et Spectateur quand la limite est atteinte |
+| `sessionList.ts`   | Recherche par code ou pseudo (`matchesSearch`) et pagination à 10 sessions (`Pager`, une page par jeu), pour le lobby et `parties.html` |
 | `types.ts`         | Contrat de protocole — lire en premier |
 | `engine/bag.ts` `board.ts` `button.ts` `counter.ts` `counter_box.ts` `dice.ts` `mw_character.ts` | Modèle et dessin des composants |
 | `engine/hex_grid.ts` | Grille hexagonale d'un plateau (`grid` du `game_json`) : même calcul que `Tourtoirac/Components/hex_grid.py` |
@@ -54,12 +56,13 @@ prétendre avoir couvert une régression. La seule vérification possible est
 | `chat.ts`          | Chat texte (`ChatPanel`) : canal général et canaux privés entre joueurs |
 | `gameLock.ts`      | Une seule page de jeu par navigateur (Web Lock `obg_game`) |
 | `idle.ts`          | Déconnexion d'un joueur inactif (popups, minuterie) |
-| `serverErrors.ts`  | Texte de l'erreur `invalid_component` (composant du `game_json` mal décrit), affiché par le lobby et la page de jeu |
+| `serverErrors.ts`  | Texte des erreurs `invalid_component` (composant du `game_json` mal décrit) et `server_full` (plateforme pleine), affichés par le lobby et la page de jeu |
 | `navigation.ts`    | URL `index.html` ↔ `game.html`, avec `?game=<nom>` pour garder l'onglet |
 | `session.ts`       | `sessionStorage` : session courante (`obg_session`) et identité (`obg_player_identity`) |
 
-Deux points d'entrée HTML distincts : `index.html` → `src/lobby.ts`, et
-`game.html` → `src/game.ts` (déclarés tous deux dans `vite.config.ts`). Le
+Trois points d'entrée HTML distincts : `index.html` → `src/lobby.ts`,
+`game.html` → `src/game.ts` et `parties.html` → `src/activeGames.ts` (déclarés
+dans `vite.config.ts` et copiés par le `Dockerfile`). Le
 balisage et le CSS sont **dans les fichiers HTML** (`index.html` fait environ
 460 lignes) ; les modules TS récupèrent les éléments par `getElementById`.
 
@@ -82,6 +85,7 @@ Les noms ne correspondent pas : c'est le piège principal.
 | `stack`   | `Stack`   | `Deck` avec `isStack` (`engine/deck.ts`) | `DeckItem` (`kind: "stack"`) |
 | `card`    | `Card`    | `Counter` avec `isCard` | `TokenItem` (`kind: "card"`) |
 | `mw_character` | `MwCharacter` | `MwCharacter` (interface, `engine/mw_character.ts`) | `MwCharacterItem` |
+| `generator` | `Generator` | aucun objet du moteur : colonne HTML `#generators` (`renderGenerators`) | `GeneratorItem`, `GeneratorModel` |
 
 Dans `game.ts`, `counters` / `countersById` / `hand` désignent donc des
 **pions**, et `counterBoxes` des compteurs numériques. Partout, l'identifiant
@@ -122,9 +126,14 @@ serveur.
   `resume_session` (`idleDisconnected`) et propose « Revenir dans la partie »
   (rechargement) ou « Retour au lobby ». Activités : déplacement de la
   souris sur le canvas, clic, touche, molette, **seulement si l'onglet a le
-  focus** (`document.hasFocus()` et onglet visible). Seuls les joueurs d'une
-  partie démarrée (`isStarted`) sont surveillés : ni les spectateurs, ni une
-  partie close, ni l'attente des autres joueurs. Les échéances sont comparées à l'horloge :
+  focus** (`document.hasFocus()` et onglet visible). Sont surveillés les
+  joueurs d'une partie démarrée (`isStarted`), ni une partie close, ni
+  l'attente des autres joueurs. **Spectateur inactif** : un spectateur n'est
+  surveillé que s'il est seul, sans aucun joueur connecté (`participants`) ;
+  il garde alors à lui seul la session chargée dans Tourtoirac. Le popup
+  arrive après 1 h (`WATCHER_IDLE_WARNING_MS`, message « depuis 1 heure »),
+  puis même déconnexion en 1 min. À côté de joueurs, un spectateur n'est
+  jamais déconnecté. Les échéances sont comparées à l'horloge :
   un onglet en arrière-plan, dont les minuteries sont ralenties, est
   déconnecté à peu près à l'heure.
 - Le navigateur **ne parle qu'à Tourtoirac**. Aucun appel HTTP vers Chabanas
@@ -180,6 +189,7 @@ titre :
 | *Caméra*, *Défilement au bord* | `cameraX/Y`, `zoom`, `screenToWorld` / `worldToScreen`, défilement au bord de l'écran |
 | *Main* | `hand` (pions tenus), `pending` (requête `acquire`/`release` en vol, délai `RESPONSE_TIMEOUT`), `flushMoves`. **Glisser-déposer** : `dragging` vaut vrai tant que le bouton gauche tient la main ; elle ne suit le pointeur que dans ce cas. `releaseOnArrival` : le bouton est remonté avant la réponse à l'`acquire` ou au `pick`, le pion est reposé dès qu'il arrive. `grabbedName` / `grabWorld*` : le pion rattrape le pointeur à la réponse de l'`acquire`. **Appui long** (`LONG_PRESS_MS`, sans bouger de plus de `LONG_PRESS_SLACK` px) : `grabStack` demande tous les autres pions sous le point d'appui (`countersAt`), suivis dans `stackRequests` puisque `pending` ne suit qu'une requête ; `hand` reste triée dans l'ordre de dessin (`sortHand`) pour que la pile soit dessinée et reposée dans son ordre. Pendant le transport, `fanStack` décale chaque pion sous le pion du dessus (`handAnchor`) de `STACK_FAN_STEP` px par rang (`STACK_FAN_MAX` rangs au plus) : les `move` diffusent cet escalier. Au lâcher (`dropHand`), `fanStack(true)` recentre toute la pile sur le pion du dessus avant les `release` ; un pion de la pile acquis après le lâcher est reposé au même centre (`stackDrop`) |
 | *Main* (fin) | Sac : `requestPick` envoie `pick` (avec un `request_id`), `applyPick` remet le pion tiré dans `counters` et, pour celui qui a cliqué, dans `hand`, sous le pointeur ; `putInBag` retire de la table un pion relâché sur un sac (`release` avec `bag_id`) |
+| *Generators* (dans la section de la main privée) | Colonne `#generators` de `game.html` (50 px, collée à gauche de `#participants`, masquée sans générateur) : un `<img>` par modèle, sur la face de son `side` (le serveur n'envoie que celle-là). Comme une carte de la main privée : bouton gauche enfoncé sur un modèle → `armedModel` (jamais pour un spectateur ni une partie close) ; le pointeur qui atteint la table, bouton toujours enfoncé → `requestGenerate` (`generate` avec `request_id`, `pending` `"generate"`) ; l'événement `generate` passe par `applyPick` (la copie inconnue est créée par `createCounter`). Au lâcher au-dessus de la colonne (`overGenerators`), `dropHand(false, null, true)` envoie chaque `release` avec `generator: true` ; un `release` qui porte `generator_id` retire la copie de `counters` et de `countersById`. La colonne s'éclaire (`drop-target`) pendant qu'on y porte des pions |
 | *Souris* | `onMouseDown` / `Move` / `Up` : **bouton gauche** = clic sur une zone de rotation, de compteur ou de dé → `request*` ; bouton gauche **enfoncé** sur un pion → `requestAcquire` (sur un sac → `requestPick`), déplacement tant qu'il reste enfoncé, bouton **relâché** → `dropHand` → `requestRelease` (`mouseup` écouté aussi sur `window`). Une main restée pleine sans bouton enfoncé (session reprise) est reprise par le prochain appui ; **bouton droit enfoncé** = déplacement de la caméra (seul moyen, menu contextuel désactivé sur le canvas) ; bouton central ignoré |
 | *Hex grid* | Aperçu de l'hexagone visé par un pion tenu (`predictedHex`, miroir de `Session.snap_to_grid`), grille de calibrage affichée par la touche **G** avec la position du pointeur relative au plateau |
 | *Dessin* | `draw()` : plateaux, compteurs, sacs (avec le nombre de pions restants), dés, pions, boutons, infobulles |
@@ -273,7 +283,14 @@ Le régénérer quand le comportement du lobby change.
 `options.border_shift` : seul `true` active le défilement de la vue quand le
 pointeur approche d'un bord de l'écran (`borderShiftEnabled`, testé dans
 `stepEdgeScroll`). Absent ou autre valeur, la vue ne bouge qu'au bouton droit.
-Réglage purement client.
+Réglage purement client. Les bandes (`EDGE_BAND`, 90 px) longent le canvas,
+sauf quand un panneau le sépare du bord de la page (`edgeArea`) : avec la main
+privée affichée, le bord bas est le bas de la page, sous la main ; avec la
+liste des participants, le bord droit est la droite de la page. Ces deux bords
+ont une bande étroite (`EDGE_PANEL_BAND`, 24 px), pour qu'on puisse porter une
+carte dans la main ou sur un nom sans faire défiler la vue. Le pointeur est donc
+suivi sur toute la page (`onWindowMouseMove` → `trackPointerForEdgeScroll`), et
+seul le fait de quitter la page arrête le défilement.
 
 L'ordre de `#participants` est celui du serveur (ordre d'arrivée des joueurs,
 ou celui choisi par l'owner) : le lecteur n'est plus placé en tête. L'owner
@@ -328,7 +345,9 @@ trop long est tronqué (`.participant-name`, `.chat-author`, onglets), entier
 dans le `title`.
 Onglet « Général » pour tous, plus un onglet par autre joueur pour un joueur
 (`setPartners`, recalculé à chaque liste de participants ; un spectateur n'a
-que le général, un canal privé déjà rempli garde son onglet). `chat_send`
+que le général, qu'il **lit sans écrire** : pas de zone de saisie,
+`setWritable`, et Tourtoirac refuse son `chat_send` ; un canal privé déjà
+rempli garde son onglet). `chat_send`
 `{text, to?}` part au submit ; l'événement `chat` → `receive`, dédoublonné
 par `id` avec l'historique `session.chat` (`setHistory`). Compteur de non-lus
 par onglet, et sur le bouton ▼/▲ qui réduit la fenêtre. Le texte est posé en

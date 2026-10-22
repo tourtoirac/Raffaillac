@@ -217,6 +217,24 @@ export interface BagItem {
   components: TokenItem[];
 }
 
+/**
+ * A model of a generator: a token or a card described without a position.
+ * Only the face it shows (side) is sent, the other one is null.
+ */
+export type GeneratorModel = Omit<TokenItem, "x" | "y">;
+
+/**
+ * A generator: a fixed component listing models, shown in a column of its own
+ * on the left of the participants, not on the table. Dragging a model out of
+ * the column creates a new copy (id of the model followed by -1, -2...); a
+ * copy released back over the column is destroyed.
+ */
+export interface GeneratorItem {
+  kind: "generator";
+  id: string;
+  components: GeneratorModel[];
+}
+
 export type DeckPileName = "draw" | "discard";
 
 /** a pile of a deck, as everybody may know it */
@@ -317,7 +335,7 @@ export interface MwCharacterItem {
 
 export interface SessionComponents {
   // a board, a counter, a dice pool, a bag, a deck, a stack, an mw_character: whatever does not move with the tokens
-  fixed: (BoardItem | BoardGroupItem | CounterItem | DicePoolItem | BagItem | DeckItem | MwCharacterItem)[];
+  fixed: (BoardItem | BoardGroupItem | CounterItem | DicePoolItem | BagItem | DeckItem | MwCharacterItem | GeneratorItem)[];
   movable: TokenItem[];
   // absent d'un Tourtoirac plus ancien : le dé est donc facultatif
   dice?: DiceItem[];
@@ -567,7 +585,13 @@ export interface ActiveSession {
 }
 
 export interface SessionsInfoEvent {
-  content: { active?: Record<string, ActiveSession[]> };
+  content: {
+    active?: Record<string, ActiveSession[]>;
+    /** active games of the whole platform, Air Force included */
+    active_games?: number | null;
+    /** the most active games the platform runs at once */
+    max_active_games?: number | null;
+  };
 }
 
 export interface ListGameEvent {
@@ -645,6 +669,8 @@ export interface ReleaseEvent extends HandEventBase {
   character_json?: MwCharacterItem | null;
   /** nickname of the player whose private hand took the token; null or absent otherwise */
   hand_of?: string | null;
+  /** the generator the copy was destroyed over; null or absent when it stays in the game */
+  generator_id?: string | null;
   /** what everybody sees of the private hands after this release */
   hands?: SessionHands;
 }
@@ -695,6 +721,21 @@ export interface PickEvent {
   component_json: TokenItem;
   /** a card taken from under an mw_character: that character without it */
   character_json?: MwCharacterItem | null;
+}
+
+// a player dragged a new copy out of a generator, sent to the whole session:
+// the copy is on the table, in the hand of that player
+export interface GenerateEvent {
+  event: "generate";
+  /** id of the generator */
+  component_id: string;
+  /** id of the model copied */
+  model_id: string;
+  user: string;
+  /** the request_id of the generate action, so a client recognises its own */
+  request_id?: string | null;
+  /** the new copy, at the place the server put it */
+  component_json: TokenItem;
 }
 
 // a player took the top card of a pile of a deck, sent to the whole session:

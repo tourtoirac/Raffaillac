@@ -7,7 +7,7 @@ COPY package.json package-lock.json* ./
 RUN npm ci
 
 COPY tsconfig.json vite.config.ts ./
-COPY index.html game.html ./
+COPY index.html game.html parties.html ./
 COPY public ./public
 COPY src ./src
 # OBG/Common, outside this repository, given as the build context "common"

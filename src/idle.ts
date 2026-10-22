@@ -4,23 +4,35 @@
 // still there; its OK button counts as an activity. Left unanswered for
 // IDLE_DISCONNECT_MS, the player is disconnected.
 //
+// A watcher is only watched while alone in the game, with no player connected:
+// the tab then only keeps the game loaded on the server, so a forgotten one is
+// let go after WATCHER_IDLE_WARNING_MS. A watcher next to players costs
+// nothing more and is never disconnected.
+//
 // Only what happens while the game tab has the focus counts: a player busy
 // in another tab or window is idle, even if the mouse crosses the game.
 
 export const IDLE_WARNING_MS = 5 * 60 * 1000;
+export const WATCHER_IDLE_WARNING_MS = 60 * 60 * 1000;
 export const IDLE_DISCONNECT_MS = 60 * 1000;
 
 // Timers of a background tab are slowed down by the browser: the deadlines
 // are compared with the clock, the interval only decides how often.
 const CHECK_INTERVAL_MS = 1000;
 
-const WARNING_MESSAGE = "Pas d'activités dans le jeu depuis 5 minutes";
+function warningMessage(delay: number): string {
+  const minutes = Math.round(delay / 60000);
+  const since = minutes % 60 === 0 ? `${minutes / 60} heure${minutes > 60 ? "s" : ""}` : `${minutes} minutes`;
+  return `Pas d'activités dans le jeu depuis ${since}`;
+}
 
 export interface IdleWatchOptions {
   /** where moving the mouse counts as an activity: the map */
   readonly moveTarget: HTMLElement;
-  /** false while nobody needs to be watched: a watcher, a game not started or closed */
-  readonly isWatched: () => boolean;
+  /** how long without activity before the popup: IDLE_WARNING_MS for a
+   * player, WATCHER_IDLE_WARNING_MS for a watcher alone; null while nobody
+   * needs to be watched (a watcher next to players, a game not started or closed) */
+  readonly warningDelay: () => number | null;
   /** called once, when the popup was left unanswered */
   readonly onDisconnect: () => void;
 }
@@ -29,7 +41,7 @@ function tabHasFocus(): boolean {
   return document.visibilityState === "visible" && document.hasFocus();
 }
 
-function createPopup(onOk: () => void): HTMLElement {
+function createPopup(onOk: () => void): { overlay: HTMLElement; text: HTMLParagraphElement } {
   const overlay = document.createElement("div");
   overlay.className = "idle-overlay";
   overlay.hidden = true;
@@ -38,7 +50,6 @@ function createPopup(onOk: () => void): HTMLElement {
   box.setAttribute("role", "alertdialog");
   box.setAttribute("aria-modal", "true");
   const text = document.createElement("p");
-  text.textContent = WARNING_MESSAGE;
   const ok = document.createElement("button");
   ok.type = "button";
   ok.textContent = "OK";
@@ -46,7 +57,7 @@ function createPopup(onOk: () => void): HTMLElement {
   box.append(text, ok);
   overlay.append(box);
   document.body.append(overlay);
-  return overlay;
+  return { overlay, text };
 }
 
 export function startIdleWatch(options: IdleWatchOptions): void {
@@ -55,7 +66,7 @@ export function startIdleWatch(options: IdleWatchOptions): void {
   let warnedAt: number | null = null;
   let disconnected = false;
 
-  const popup = createPopup(() => {
+  const { overlay: popup, text: popupText } = createPopup(() => {
     // the answer to the popup is an activity: everything starts again
     popup.hidden = true;
     warnedAt = null;
@@ -75,16 +86,18 @@ export function startIdleWatch(options: IdleWatchOptions): void {
 
   const timer = window.setInterval(() => {
     const now = Date.now();
-    if (!options.isWatched()) {
-      // a watcher or a closed game: nothing to count, the popup goes away
+    const delay = options.warningDelay();
+    if (delay === null) {
+      // a watcher next to players or a closed game: nothing to count, the popup goes away
       popup.hidden = true;
       warnedAt = null;
       lastActivity = now;
       return;
     }
     if (warnedAt === null) {
-      if (now - lastActivity >= IDLE_WARNING_MS) {
+      if (now - lastActivity >= delay) {
         warnedAt = now;
+        popupText.textContent = warningMessage(delay);
         popup.hidden = false;
       }
       return;

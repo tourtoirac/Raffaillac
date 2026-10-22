@@ -197,6 +197,40 @@
     #participants[hidden] {
       display: none;
     }
+    /* The models of the generators, one column against the left of the
+       participants. A copy released over it is destroyed: it lights up while
+       a token is carried over it. */
+    #generators {
+      flex: none;
+      width: 50px;
+      margin-left: 12px;
+      padding: 4px 0;
+      box-sizing: border-box;
+      display: flex;
+      flex-direction: column;
+      align-items: center;
+      gap: 6px;
+      overflow-y: auto;
+      background: #262626;
+      border: 2px solid #444;
+      border-radius: 4px;
+    }
+    #generators[hidden] {
+      display: none;
+    }
+    #generators:not([hidden]) + #participants {
+      margin-left: 0;
+    }
+    #generators.drop-target {
+      border-color: #ffd700;
+    }
+    #generators .generator-item {
+      flex: none;
+      width: 40px;
+      height: auto;
+      cursor: grab;
+      user-select: none;
+    }
     #participants ul {
       flex: 1;
       min-height: 0;
@@ -584,7 +618,8 @@
       height: auto;
     }
     #chat-panel.collapsed .chat-log,
-    #chat-panel.collapsed .chat-form {
+    #chat-panel.collapsed .chat-form,
+    .chat-form[hidden] {
       display: none;
     }
     .chat-header {
@@ -716,6 +751,9 @@
     <canvas id="gameCanvas"></canvas>
     <!-- one area for each player showing cards of its hand to the reader -->
     <div id="show-zones"></div>
+    <!-- the models of the generators of the game, dragged onto the table to
+         create a copy; hidden when the game has none -->
+    <aside id="generators" aria-label="Générateurs" hidden></aside>
     <!-- filled from the participants the server sends at each arrival or departure -->
     <aside id="participants" aria-label="Joueurs et spectateurs" hidden>
       <!-- filled from the "documents" of the game; hidden when it has none -->

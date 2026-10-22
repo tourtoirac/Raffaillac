@@ -2,6 +2,16 @@
 
 import type { ServerErrorEvent } from "./types";
 
+// "server_full": the platform already runs its maximum number of games, every
+// game and service included (Chabanas counts them)
+export function serverFullMessage(maxActiveGames: number | null): string {
+  const limit = maxActiveGames === null ? "" : ` (${maxActiveGames})`;
+  return (
+    `Le serveur a atteint son nombre maximum de parties en cours${limit}. ` +
+    "Réessayez quand une partie se sera terminée."
+  );
+}
+
 // "invalid_component": the game_json describes a component the server cannot
 // build. The player cannot fix it, but the message names the component so the
 // author of the game can.

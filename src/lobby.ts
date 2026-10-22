@@ -18,7 +18,8 @@ import type {
   SessionCreatedEvent,
   SessionsInfoEvent,
 } from "./types";
-import { invalidComponentMessage } from "./serverErrors";
+import { invalidComponentMessage, serverFullMessage } from "./serverErrors";
+import { Pager, emptyListMessage, matchesSearch } from "./sessionList";
 import { getSocket } from "./ws/wsClient";
 import type { SocketStateMessage } from "./ws/wsClient";
 
@@ -45,6 +46,37 @@ const tablesContainer = document.getElementById("tables-container") as HTMLDivEl
 
 let gameInfo: Record<string, GameInfo> = {};
 let sessionsData: Record<string, ActiveSession[]> = {};
+// games in progress (with players in them) of the whole platform and their
+// limit, from the last sessions_info
+let activeGames: number | null = null;
+let maxActiveGames: number | null = null;
+
+// the platform runs its maximum number of games in progress: no new game, and
+// no joining, until a place is free
+function platformFull(): boolean {
+  return activeGames !== null && maxActiveGames !== null && activeGames >= maxActiveGames;
+}
+
+// greys a button out while the platform is full
+function lockWhenFull(button: HTMLButtonElement): HTMLButtonElement {
+  if (platformFull()) {
+    button.disabled = true;
+    button.classList.add("locked");
+    button.title = serverFullMessage(maxActiveGames);
+  }
+  return button;
+}
+
+// search by session code or nickname, applied to the list of every game; each
+// list is shown 10 sessions at a time
+const searchInput = document.getElementById("session-search") as HTMLInputElement;
+let searchQuery = "";
+const pager = new Pager(() => renderAll());
+searchInput.addEventListener("input", () => {
+  searchQuery = searchInput.value;
+  pager.reset();
+  renderAll();
+});
 
 // onglet courant : initialisé par ?game=Waterloo puis mis à jour à chaque
 // changement d'onglet, pour survivre à un rechargement de la page
@@ -256,6 +288,14 @@ function handleServerMessage(data: ServerMessage): void {
           "Impossible de lancer la partie : plusieurs composants de ce jeu " +
             "portent le même identifiant. Le jeu doit être corrigé.",
         );
+      } else if (code === "server_full") {
+        // the platform runs its maximum number of games, every game included
+        openingGameName = null;
+        lastJoinAttempt = null;
+        closeCreateModal();
+        closeJoinModal();
+        window.alert(serverFullMessage(maxActiveGames));
+        refreshSessions();
       } else if (code === "invalid_component") {
         // Same on creation and on join: the game_json is broken, the modal
         // stays closed and the message names the component to fix.
@@ -283,6 +323,8 @@ function handleListGame(data: ListGameEvent): void {
 
 function handleSessionsInfo(data: SessionsInfoEvent): void {
   sessionsData = data.content?.active ?? {};
+  activeGames = data.content?.active_games ?? null;
+  maxActiveGames = data.content?.max_active_games ?? null;
   renderAll();
 }
 
@@ -681,7 +723,9 @@ function renderAll(): void {
 
   gameNames.forEach((name, index) => {
     const game = gameInfo[name];
-    const sessions = sessionsData[name] || [];
+    const sessions = (sessionsData[name] || []).filter((session) =>
+      matchesSearch(searchQuery, session.code, (session.players ?? []).map((p) => p.nickname)),
+    );
     const variants = game?.variant ?? {};
     const variantKeys = Object.keys(variants);
 
@@ -698,7 +742,7 @@ function renderAll(): void {
 
     // Air Force games are played in Hautefort, not on the OBG table
     if (name === AIR_FORCE_TAB) {
-      renderAirForceTab(container);
+      renderAirForceTab(container, searchQuery, pager, lockWhenFull);
       tablesContainer.appendChild(container);
       return;
     }
@@ -717,7 +761,7 @@ function renderAll(): void {
       `;
 
       const tbody = table.querySelector("tbody") as HTMLTableSectionElement;
-      for (const session of sessions) {
+      for (const session of pager.slice(name, sessions)) {
         const row = document.createElement("tr");
         const codeCell = document.createElement("td");
         codeCell.textContent = session.code || "-";
@@ -766,7 +810,7 @@ function renderAll(): void {
           // aucun pseudo prérempli : le joueur choisit son propre nom
           joinBtn.onclick = () =>
             openJoinModal(session.code ?? "", "", name, "player", session.nationalities ?? []);
-          actionCell.appendChild(joinBtn);
+          actionCell.appendChild(lockWhenFull(joinBtn));
         }
 
         // un spectateur suit la partie sans y jouer : meme adhésion, meme
@@ -776,7 +820,7 @@ function renderAll(): void {
           watchBtn.className = "watch-session-btn";
           watchBtn.textContent = "Spectateur";
           watchBtn.onclick = () => openJoinModal(session.code ?? "", "", name, "watcher");
-          actionCell.appendChild(watchBtn);
+          actionCell.appendChild(lockWhenFull(watchBtn));
         }
 
         row.appendChild(codeCell);
@@ -786,11 +830,10 @@ function renderAll(): void {
       }
 
       container.appendChild(table);
+      const controls = pager.controls(name, sessions.length);
+      if (controls) container.appendChild(controls);
     } else {
-      const emptyMsg = document.createElement("p");
-      emptyMsg.textContent = "Aucune session active.";
-      emptyMsg.style.color = "#888";
-      container.appendChild(emptyMsg);
+      container.appendChild(emptyListMessage(searchQuery));
     }
 
     if (variantKeys.length > 1) {
@@ -815,13 +858,14 @@ function renderAll(): void {
       dropdownBtn.onclick = () => {
         dropdownContent.classList.toggle("show");
       };
+      lockWhenFull(dropdownBtn);
       container.appendChild(dropdown);
     } else {
       const createBtn = document.createElement("button");
       createBtn.textContent = "Create";
       createBtn.className = "create-game-btn";
       createBtn.onclick = () => openCreateModal(name, variantKeys[0]);
-      container.appendChild(createBtn);
+      container.appendChild(lockWhenFull(createBtn));
     }
 
     tablesContainer.appendChild(container);
@@ -871,7 +915,11 @@ function bindEventHandlers(): void {
 function main(): void {
   bindEventHandlers();
   connectSharedSocket();
-  startAirForceLobby(renderAll);
+  // an Air Force game filling or emptying changes the count of the platform too
+  startAirForceLobby(() => {
+    renderAll();
+    refreshSessions();
+  });
 }
 
 main();
