@@ -27,7 +27,8 @@ COPY --from=build /app/dist /usr/share/nginx/html/
 # static site + /hautefort/ forwarded to the Air Force service
 COPY nginx/default.conf /etc/nginx/conf.d/default.conf
 
-# Game resources (Games/) are mounted as a volume at /usr/share/nginx/html/Games
+# Game resources (OBG/Games, outside this repository) are mounted as a volume at
+# /usr/share/nginx/html/Games
 
 EXPOSE 80
 

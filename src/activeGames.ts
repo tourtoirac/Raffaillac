@@ -1,9 +1,16 @@
-// Page of the games in progress: the sessions of every game, Air Force
-// included, with at least one player in them, on one list, with the number of
-// games in progress of the platform and its limit. Each row leads to the lobby
-// tab of its game.
+// Page of the games in progress: the sessions of every game, the refereed
+// ones (Air Force, Judge Dredd) included, with at least one player in them, on
+// one list, with the number of games in progress of the platform and its limit.
+// Each row leads to the lobby tab of its game.
 
 import { AIR_FORCE_LABEL, AIR_FORCE_TAB, airForceGames, airForceMatches, startAirForceLobby } from "./airForceLobby";
+import {
+  JUDGE_DREDD_LABEL,
+  JUDGE_DREDD_TAB,
+  judgeDreddGames,
+  judgeDreddMatches,
+  startJudgeDreddLobby,
+} from "./judgeDreddLobby";
 import { lobbyReturnUrl } from "./navigation";
 import { Pager, emptyListMessage, matchesSearch } from "./sessionList";
 import type { ActiveSession, GameInfo, ListGameEvent, SessionsInfoEvent } from "./types";
@@ -57,6 +64,16 @@ function rows(): Row[] {
     all.push({
       gameName: AIR_FORCE_TAB,
       gameLabel: AIR_FORCE_LABEL,
+      code: game.code,
+      players: game.players.map((p) => ({ nickname: p.nickname, owner: p.owner, connected: p.connected })),
+      started: game.status !== "waiting",
+    });
+  }
+  for (const game of judgeDreddGames()) {
+    if (!judgeDreddMatches(game, searchQuery)) continue;
+    all.push({
+      gameName: JUDGE_DREDD_TAB,
+      gameLabel: JUDGE_DREDD_LABEL,
       code: game.code,
       players: game.players.map((p) => ({ nickname: p.nickname, owner: p.owner, connected: p.connected })),
       started: game.status !== "waiting",
@@ -165,9 +182,11 @@ searchInput.addEventListener("input", () => {
 });
 
 connect();
-// Air Force games come from Hautefort, which also pushes their changes; an Air
-// Force game created or ended changes the count of the platform as well
-startAirForceLobby(() => {
+// the refereed games come from their service (the modules of Hautefort), which also
+// push their changes; one created or ended changes the count of the platform as well
+const refereedChanged = (): void => {
   render();
   getSocket()?.send({ action: "list_sessions" });
-});
+};
+startAirForceLobby(refereedChanged);
+startJudgeDreddLobby(refereedChanged);

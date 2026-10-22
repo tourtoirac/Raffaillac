@@ -559,8 +559,12 @@ export interface GameVariantInfo {
   nationalities?: string[];
 }
 
-/** the family of a game, set in Chabanas: one tab of the lobby per type */
-export type GameType = "Boardgame" | "Wargame";
+/**
+ * the family of a game, set in Chabanas: one tab of the lobby per type.
+ * "Refereed" is the lobby's own: the games whose rules are applied by a
+ * service of their own (Hautefort), never set by Chabanas.
+ */
+export type GameType = "Boardgame" | "Wargame" | "Refereed";
 
 export interface GameInfo {
   name: string;

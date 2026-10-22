@@ -26,8 +26,10 @@ export default defineConfig({
     fs: {
       allow: [".", resolve(import.meta.dirname, "../Common")],
     },
-    // Air Force tab: a local Hautefort, as the nginx of the image forwards it
+    // tabs of the refereed games: a local Hautefort, as the nginx of the image forwards it
     proxy: {
+      // game resources (OBG/Games, outside this repository), mounted in the local Raffaillac container
+      "/Games/": "http://localhost:12200",
       "/hautefort/": {
         target: "http://localhost:12210",
         ws: true,

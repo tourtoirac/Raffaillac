@@ -156,10 +156,12 @@ def draw_lobby_diagram(pdf, top):
     pdf.label(x0 + 4, ty, 28, 8, "Boardgame", 8, (255, 255, 255), True)
     pdf.box(x0 + 33, ty, 24, 8, GREY, MID_GREY)
     pdf.label(x0 + 33, ty, 24, 8, "Wargame", 8)
+    pdf.box(x0 + 58, ty, 24, 8, GREY, MID_GREY)
+    pdf.label(x0 + 58, ty, 24, 8, "Arbitrés", 8)
     pdf.set_draw_color(*BLUE)
     pdf.set_line_width(0.6)
     pdf.line(x0 + 4, ty + 8, x0 + w0 - 4, ty + 8)
-    pdf.marker(x0 + 61, ty + 4, 2)
+    pdf.marker(x0 + 86, ty + 4, 2)
 
     # game tabs
     gy = top + 29
@@ -246,7 +248,8 @@ def build():
     pdf.table([
         ["", "Élément", "Rôle"],
         ["1", "Lien « Aide »", "Ouvre ce guide dans un nouvel onglet."],
-        ["2", "Onglets de type de jeu", "Boardgame (jeux de plateau) ou Wargame (jeux de guerre)."],
+        ["2", "Onglets de type de jeu", "Boardgame (jeux de plateau), Wargame (jeux de guerre) ou "
+                                        "Arbitrés (jeux dont le serveur applique les règles)."],
         ["3", "Liste des jeux", "Les jeux du type choisi ; cliquer sur un jeu affiche ses parties."],
         ["4", "Joueurs d'une partie", "Un bouton par joueur assis : vert s'il est en jeu, bleu si sa place est libre."],
         ["5", "Rejoindre", "« Join » pour prendre un nouveau siège, « Spectateur » pour regarder."],
@@ -256,9 +259,10 @@ def build():
     # ---- choosing a game ----
     pdf.h1("Choisir un jeu")
     pdf.para(
-        "Les jeux sont rangés en deux familles, accessibles par les onglets en haut de "
-        "la page : **Boardgame** et **Wargame**. La colonne de gauche liste les jeux de "
-        "la famille affichée, par ordre alphabétique ; le jeu sélectionné est encadré en bleu."
+        "Les jeux sont rangés en trois familles, accessibles par les onglets en haut de "
+        "la page : **Boardgame**, **Wargame** et **Arbitrés**. La colonne de gauche liste "
+        "les jeux de la famille affichée, par ordre alphabétique ; le jeu sélectionné est "
+        "encadré en bleu."
     )
     pdf.bullets([
         "Le catalogue est fourni par le serveur : seuls les jeux activés par "
@@ -267,6 +271,24 @@ def build():
         "Le jeu et la famille choisis sont gardés dans l'adresse de la page "
         "(?game=…&type=…). Recharger la page ou revenir d'une partie ramène donc sur "
         "le même jeu, et l'adresse peut être partagée avec un ami.",
+    ])
+
+    pdf.h2("Les jeux arbitrés")
+    pdf.para(
+        "Sur la table de jeu ordinaire, ce sont les joueurs qui appliquent les règles : "
+        "le site déplace les pièces et les cartes comme on le ferait autour d'une vraie "
+        "table. Les jeux de l'onglet **Arbitrés** (aujourd'hui **Air Force** et **Judge "
+        "Dredd**) se jouent au contraire sur une page qui leur est propre, où le serveur "
+        "fait respecter les règles : il n'accepte que les coups permis, lance les dés et "
+        "garde secret ce qui doit l'être."
+    )
+    pdf.bullets([
+        "La liste, la création d'une partie, « Join », « Spectateur » et la reprise d'une "
+        "place s'y utilisent comme pour les autres jeux. Air Force demande en plus le camp "
+        "et l'avion, Judge Dredd la couleur du juge.",
+        "Une partie de **Judge Dredd** accueille 2 à 6 joueurs ; elle commence quand son "
+        "créateur clique sur « Lancer la partie », sur la page de jeu.",
+        "Si le serveur d'un jeu arbitré ne répond pas, son onglet disparaît jusqu'à son retour.",
     ])
 
     # ---- the session table ----
@@ -292,6 +314,13 @@ def build():
         "La liste se met à jour toute seule : chaque arrivée ou départ d'un joueur, "
         "chaque nouvelle partie est reflétée sans recharger la page."
     )
+    pdf.h2("Rechercher, feuilleter")
+    pdf.bullets([
+        "Le champ de **recherche** au-dessus des jeux filtre les parties par code ou par "
+        "pseudo d'un joueur, quelle que soit la casse.",
+        "Chaque jeu montre **10 parties par page** : les boutons « Précédent » et "
+        "« Suivant » sous le tableau font défiler les autres.",
+    ])
 
     # ---- creating a session ----
     pdf.h1("Créer une partie")
@@ -375,6 +404,8 @@ def build():
         ["Cette partie a déjà trop de spectateurs.", "Le nombre maximal de spectateurs est atteint."],
         ["Le serveur a refusé cette adhésion.", "La partie est pleine, commencée ou n'existe plus : "
                                                 "elle disparaîtra de la liste à la prochaine mise à jour."],
+        ["Le serveur a atteint son nombre maximum de parties en cours.",
+         "Le site accueille au plus 20 parties en cours à la fois : réessayer quand une se sera libérée."],
     ], (66, 108))
     pdf.para(
         "Un jeu mal décrit (composants en double ou incomplets) est signalé par une "
@@ -385,6 +416,10 @@ def build():
     # ---- good to know ----
     pdf.h1("Bon à savoir")
     pdf.bullets([
+        "**Parties en cours** : le lien en haut de la page ouvre la liste des parties où "
+        "au moins un joueur est connecté, tous jeux confondus, avec le nombre de parties "
+        "en cours du site et sa limite (20). Quand elle est atteinte, les boutons Create, "
+        "Join et Spectateur sont grisés.",
         "**Une seule partie par navigateur.** Si une table de jeu est déjà ouverte dans "
         "un autre onglet, le lobby refuse d'en ouvrir une seconde : fermez d'abord l'autre "
         "onglet. Pour jouer deux personnages, utilisez deux navigateurs différents.",

@@ -1,18 +1,30 @@
-// "Air Force" tab of the lobby. Air Force is not played on the OBG table: its
-// games live in the Hautefort service, published next to the lobby under
-// hautefort/ (same origin: the Raffaillac nginx forwards it). This tab lists
-// them, creates and joins them through the Hautefort API, and opens its game
-// page. As everywhere in OBG there is no account: a nickname, an optional
-// personal key to take one's seat back, an optional access key for the game.
+// "Air Force" tab of the lobby, among the refereed games. Air Force is not
+// played on the OBG table: its games live in the airforce module of the
+// Hautefort service, published next to the lobby under hautefort/airforce/
+// (same origin: the Raffaillac nginx forwards it). This tab lists them, creates
+// and joins them through the API of the module, and opens its game page
+// (serviceModal.ts).
 
+import {
+  type Field,
+  type SeatGrant,
+  enterServiceGame,
+  openModal,
+  postJson,
+  selectField,
+  serviceUrl,
+  textField,
+  watchersCheckbox,
+} from "./serviceModal";
 import { emptyListMessage, matchesSearch } from "./sessionList";
 import type { Pager } from "./sessionList";
 
 export const AIR_FORCE_TAB = "air_force";
 export const AIR_FORCE_LABEL = "Air Force";
 
-// Hautefort, next to the lobby whatever the public path (/ locally, /obg/ in production)
-const HAUTEFORT = new URL("hautefort/", new URL(import.meta.env.BASE_URL, window.location.href));
+// the Air Force module of Hautefort, next to the lobby whatever the public path
+// (/ locally, /obg/ in production)
+const HAUTEFORT = serviceUrl("hautefort/airforce/");
 // seat tokens, read back by the Hautefort game page (same origin, same tab)
 const SEATS_KEY = "hautefort_seats";
 
@@ -58,14 +70,6 @@ interface Catalog {
     turn_options?: (number | null)[]; // null: no limit
     sides: CatalogSide[];
   }[];
-}
-
-interface SeatGrant {
-  game_id: string;
-  token: string;
-  nickname: string;
-  role: "player" | "watcher";
-  side: string | null;
 }
 
 let games: AirForceGame[] = [];
@@ -124,127 +128,12 @@ export function startAirForceLobby(onChange: () => void): void {
   open();
 }
 
-async function post(path: string, body: unknown): Promise<SeatGrant> {
-  const response = await fetch(new URL(path, HAUTEFORT), {
-    method: "POST",
-    headers: { "Content-Type": "application/json" },
-    body: JSON.stringify(body),
-  });
-  const data = (await response.json()) as SeatGrant & { error?: { message: string } };
-  if (!response.ok) throw new Error(data.error?.message ?? `Erreur ${response.status}`);
-  return data;
+function post(path: string, body: unknown): Promise<SeatGrant> {
+  return postJson(HAUTEFORT, path, body);
 }
 
 function enterGame(grant: SeatGrant): void {
-  let seats: Record<string, unknown> = {};
-  try {
-    seats = JSON.parse(window.sessionStorage.getItem(SEATS_KEY) ?? "{}") as Record<string, unknown>;
-  } catch {
-    seats = {};
-  }
-  seats[grant.game_id] = { token: grant.token, nickname: grant.nickname, role: grant.role, side: grant.side };
-  window.sessionStorage.setItem(SEATS_KEY, JSON.stringify(seats));
-  const url = new URL(".", HAUTEFORT);
-  url.searchParams.set("game", grant.game_id);
-  window.location.href = url.toString();
-}
-
-// -------------------------------------------------
-// Modal (same look as the OBG modals of index.html)
-// -------------------------------------------------
-
-interface Field {
-  name: string;
-  label: string;
-  input: HTMLInputElement | HTMLSelectElement;
-}
-
-function textField(name: string, label: string, placeholder = "", value = "", readOnly = false): Field {
-  const input = document.createElement("input");
-  input.type = "text";
-  input.placeholder = placeholder;
-  input.value = value;
-  input.readOnly = readOnly;
-  return { name, label, input };
-}
-
-function selectField(name: string, label: string, options: { value: string; label: string }[], value?: string): Field {
-  const input = document.createElement("select");
-  for (const o of options) {
-    const option = document.createElement("option");
-    option.value = o.value;
-    option.textContent = o.label;
-    input.appendChild(option);
-  }
-  if (value !== undefined) input.value = value;
-  return { name, label, input };
-}
-
-function openModal(
-  title: string,
-  fields: Field[],
-  confirmLabel: string,
-  onConfirm: (values: Record<string, string>) => Promise<void>,
-  extra?: (form: HTMLDivElement, fields: Map<string, Field>) => void,
-): void {
-  const overlay = document.createElement("div");
-  overlay.className = "modal-overlay show";
-  const form = document.createElement("div");
-  form.className = "modal-form";
-  const close = document.createElement("button");
-  close.className = "modal-close";
-  close.type = "button";
-  close.textContent = "×";
-  close.onclick = () => overlay.remove();
-  const heading = document.createElement("h3");
-  heading.textContent = title;
-  form.append(close, heading);
-  const byName = new Map<string, Field>();
-  for (const f of fields) {
-    const label = document.createElement("label");
-    label.textContent = f.label;
-    form.append(label, f.input);
-    byName.set(f.name, f);
-  }
-  extra?.(form, byName);
-  const error = document.createElement("div");
-  error.className = "error-msg";
-  error.style.display = "none";
-  const buttons = document.createElement("div");
-  buttons.className = "form-buttons";
-  const cancel = document.createElement("button");
-  cancel.className = "btn-cancel";
-  cancel.textContent = "Annuler";
-  cancel.onclick = () => overlay.remove();
-  const confirm = document.createElement("button");
-  confirm.className = "btn-confirm";
-  confirm.textContent = confirmLabel;
-  confirm.onclick = async () => {
-    const values: Record<string, string> = {};
-    for (const [name, f] of byName) values[name] = f.input.value.trim();
-    if (!values.nickname) {
-      error.textContent = "Le nickname est obligatoire.";
-      error.style.display = "block";
-      return;
-    }
-    confirm.disabled = true;
-    try {
-      await onConfirm(values);
-    } catch (e) {
-      error.textContent = (e as Error).message;
-      error.style.display = "block";
-      confirm.disabled = false;
-    }
-  };
-  buttons.append(cancel, confirm);
-  form.append(error, buttons);
-  overlay.appendChild(form);
-  overlay.addEventListener("keydown", (e) => {
-    if (e.key === "Enter" && !confirm.disabled) confirm.click();
-    if (e.key === "Escape") overlay.remove();
-  });
-  document.body.appendChild(overlay);
-  (fields.find((f) => !(f.input as HTMLInputElement).readOnly)?.input ?? confirm).focus();
+  enterServiceGame(HAUTEFORT, SEATS_KEY, grant);
 }
 
 function aircraftOptions(side: CatalogSide | undefined, keys?: string[]): { value: string; label: string }[] {
@@ -319,17 +208,7 @@ function openCreateModal(): void {
       );
     },
     (form) => {
-      const row = document.createElement("div");
-      row.className = "checkbox-row";
-      watchers = document.createElement("input");
-      watchers.type = "checkbox";
-      watchers.id = "af-allow-watchers";
-      watchers.checked = true;
-      const label = document.createElement("label");
-      label.htmlFor = "af-allow-watchers";
-      label.textContent = "Permettre les spectateurs";
-      row.append(watchers, label);
-      form.appendChild(row);
+      watchers = watchersCheckbox(form, "af-allow-watchers");
     },
   );
 }

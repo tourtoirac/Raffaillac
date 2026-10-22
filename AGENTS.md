@@ -46,7 +46,8 @@ prétendre avoir couvert une régression. La seule vérification possible est
 | ------------------ | ---- |
 | `game.ts`          | Page de jeu : état, canvas, souris, messages serveur (~1 700 lignes) |
 | `lobby.ts`         | Page de lobby : onglets de jeux, tables, modales créer/rejoindre (~700 lignes) |
-| `activeGames.ts`   | Page `parties.html` (lien « Parties en cours » du lobby) : les parties en cours (au moins un joueur connecté), tous jeux confondus (Air Force compris), compteur `active_games` / `max_active_games` de `sessions_info` ; le lobby grise Create, Join et Spectateur quand la limite est atteinte |
+| `activeGames.ts`   | Page `parties.html` (lien « Parties en cours » du lobby) : les parties en cours (au moins un joueur connecté), tous jeux confondus (jeux arbitrés compris), compteur `active_games` / `max_active_games` de `sessions_info` ; le lobby grise Create, Join et Spectateur quand la limite est atteinte |
+| `airForceLobby.ts` `judgeDreddLobby.ts` `serviceModal.ts` | Onglets des jeux arbitrés (modules de Hautefort) et ce qu'ils partagent (voir § Lobby) |
 | `sessionList.ts`   | Recherche par code ou pseudo (`matchesSearch`) et pagination à 10 sessions (`Pager`, une page par jeu), pour le lobby et `parties.html` |
 | `types.ts`         | Contrat de protocole — lire en premier |
 | `engine/bag.ts` `board.ts` `button.ts` `counter.ts` `counter_box.ts` `dice.ts` `mw_character.ts` | Modèle et dessin des composants |
@@ -138,7 +139,8 @@ serveur.
   déconnecté à peu près à l'heure.
 - Le navigateur **ne parle qu'à Tourtoirac**. Aucun appel HTTP vers Chabanas
   (le seul `fetch` est celui de `conf.json` par `wsWorker.ts`). Seule
-  exception : l'onglet Air Force, qui parle à Hautefort (voir § Lobby).
+  exception : les onglets des jeux arbitrés, qui parlent à Hautefort (voir
+  § Lobby).
 
 ### Parcours d'un joueur
 
@@ -248,26 +250,41 @@ par-dessus pendant `INFO_MESSAGE_MS` (5 s) après le dernier message, puis le
 bandeau revient à `counterInfoText`, ou disparaît s'il est vide.
 
 Lobby : `#type-tabs` porte un onglet horizontal par type de jeu
-(`GAME_TYPES` dans `lobby.ts` : `Boardgame`, `Wargame`). Le type vient de
+(`GAME_TYPES` dans `lobby.ts` : `Boardgame`, `Wargame`, `Refereed`, ce
+dernier affiché « Arbitrés » par `TYPE_LABELS`). Le type vient de
 `GameInfo.type`, défini dans Chabanas ; absent, le jeu est rangé en `Wargame`.
-Les onglets de jeux (`#tabs-container`) ne listent que les jeux du type
-affiché (`visibleGameNames`). L'onglet courant est gardé dans `?type=` ; sans
-ce paramètre, c'est le type du jeu de `?game=` qui est affiché.
+`Refereed` n'est jamais donné par Chabanas : il range les jeux **arbitrés**,
+dont les règles sont appliquées par leur propre service et pas par la table
+OBG (`REFEREED_GAMES` : Air Force, Judge Dredd). Les onglets de jeux
+(`#tabs-container`) ne listent que les jeux du type affiché
+(`visibleGameNames`). L'onglet courant est gardé dans `?type=` ; sans ce
+paramètre, c'est le type du jeu de `?game=` qui est affiché.
 
-Onglet **Air Force** (`airForceLobby.ts`, clé `air_force`, type Wargame) :
-Air Force ne se joue pas sur la table OBG mais dans le service `OBG/Hautefort`.
-L'onglet n'apparaît que si Hautefort répond (WebSocket `hautefort/ws/lobby`,
-qui pousse la liste des parties à chaque changement) ; il est ajouté par
-`offeredGameNames` et rendu par `renderAirForceTab` dans `renderAll`. Création,
+Jeux arbitrés : **Air Force** (`airForceLobby.ts`, clé `air_force`, service
+module `airforce` de `OBG/Hautefort` sous `hautefort/airforce/`) et **Judge
+Dredd** (`judgeDreddLobby.ts`, clé `judge_dredd_refereed`, module `judgedredd`
+de `OBG/Hautefort` sous `hautefort/judgedredd/` ; pas
+`judge_dredd`, que la comparaison sans casse confondrait avec la version table
+`Judge_Dredd` de Chabanas). Chaque onglet n'apparaît que si son service répond
+(WebSocket `<module>/ws/lobby`, qui pousse la liste des parties à chaque
+changement) ; il est ajouté par `offeredGameNames` et rendu par
+`renderAirForceTab` / `renderJudgeDreddTab` dans `renderAll`. Création,
 adhésion, reprise d'un siège déconnecté et spectateur passent par l'API REST
-de Hautefort (`hautefort/api/...`, même origine), avec les mêmes champs que les
-modales OBG (pseudo, clé d'utilisateur, clé d'accès). Le jeton de siège rendu
-est rangé dans `sessionStorage["hautefort_seats"]` puis la page part sur
-`hautefort/?game=<id>`. Pas de `gameLock` : Hautefort a ses propres sockets.
-Le nginx de l'image (`nginx/default.conf`) relaie `/hautefort/` vers
-`obg-hautefort:8000`, préfixe retiré et WebSockets comprises (résolution DNS
-à la requête : le lobby reste servi si Hautefort est arrêté) ; `npm run dev`
-fait de même vers `localhost:12210` (`vite.config.ts`).
+du service (même origine), avec les mêmes champs que les modales OBG (pseudo,
+clé d'utilisateur, clé d'accès), plus le camp et l'avion pour Air Force, la
+couleur du juge pour Judge Dredd. Ce que les deux onglets partagent est dans
+`serviceModal.ts` (`openModal`, `textField`, `selectField`,
+`watchersCheckbox`, `postJson`, `enterServiceGame`) : le jeton de siège rendu
+est rangé dans `sessionStorage["hautefort_seats"]` (Air Force) ou
+`sessionStorage["judgedredd_seats"]`, puis la page part sur
+`<module>/?game=<id>`. Pas de `gameLock` : chaque module a ses propres
+sockets. Une partie Judge Dredd se lance depuis sa page de jeu, par son
+créateur (2 à 6 joueurs). Le nginx de l'image (`nginx/default.conf`) relaie
+`/hautefort/` vers `obg-hautefort:8000`, préfixe retiré et WebSockets
+comprises (résolution DNS à la requête : le lobby reste servi si Hautefort
+est arrêté) ; `npm run dev` fait de même vers `localhost:12210`
+(`vite.config.ts`). Hautefort redirige ses anciennes URL (`hautefort/`,
+`hautefort/api/...`) vers `hautefort/airforce/`.
 
 Journal des messages du lobby (`#status-container`) : masqué dans `index.html`
 (`hidden`), `lobby.ts` ne l'affiche que si la page est servie depuis
@@ -537,11 +554,15 @@ clic ou un double clic ne prend rien.
 4. Tourtoirac : `case` dans `Session.load_session_components`, classe dans
    `Components/`.
 
-## `Games/` n'est pas versionné
+## `Games/` hors du dépôt
 
-`.gitignore` exclut `Games/` et `Legacy/`. Les assets de jeu (plateaux, pions,
-règles) sont servis depuis `/Games/` et **montés en lecture seule** dans le
-conteneur. Un clone frais n'a donc pas de plateaux : les tests visuels ou
+Les assets de jeu (plateaux, pions, règles) sont dans `OBG/Games/`, à la racine
+d'OBG depuis le 22/10/2026 (avant : `Raffaillac/Games/`), servis depuis
+`/Games/` et **montés en lecture seule** dans le conteneur
+(`Git Quietam/docker-compose.yaml`, `docker-compose.yml` : `../Games`) ;
+`npm run dev` relaie `/Games/` vers le conteneur local (`localhost:12200`).
+`.gitignore` exclut toujours `Games/` (au cas où) et `Legacy/`.
+Un clone frais d'OBG sans `Games/` n'a pas de plateaux : les tests visuels ou
 manuels en local échoueront sur des images manquantes tant que le dossier n'est
 pas restauré. `Legacy/` est de l'ancien code — ne pas y toucher, ne pas y
 chercher de références.

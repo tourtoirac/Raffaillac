@@ -8,8 +8,8 @@ services:
       # Port exposé du service frontend (nginx)
       - "8080:80"
     volumes:
-      # Ressources de jeu montées depuis le dépôt (plateaux, pions, règles)
-      - ./Games:/usr/share/nginx/html/Games:ro
+      # Ressources de jeu (plateaux, pions, règles), à la racine d'OBG (OBG/Games)
+      - ../Games:/usr/share/nginx/html/Games:ro
 
   # Backend Chabanas : à activer/paramétrer selon votre déploiement.
   # chabanas:

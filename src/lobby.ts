@@ -5,6 +5,13 @@ import {
   renderAirForceTab,
   startAirForceLobby,
 } from "./airForceLobby";
+import {
+  JUDGE_DREDD_LABEL,
+  JUDGE_DREDD_TAB,
+  judgeDreddAvailable,
+  renderJudgeDreddTab,
+  startJudgeDreddLobby,
+} from "./judgeDreddLobby";
 import { GAME_OPEN_ELSEWHERE_MESSAGE, isGameOpenElsewhere } from "./gameLock";
 import { gameEntryUrl } from "./navigation";
 import { storePlayerIdentity, storeSession } from "./session";
@@ -101,9 +108,14 @@ function selectedGameIndex(gameNames: string[]): number {
 }
 
 // The types of game, in the order of their tabs. Chabanas says which one a
-// game belongs to; a game it gives no type to is filed as a wargame.
-const GAME_TYPES: GameType[] = ["Boardgame", "Wargame"];
+// game belongs to; a game it gives no type to is filed as a wargame. The
+// refereed games are not Chabanas games: their rules are applied by a service
+// of their own (Hautefort, with a module per game: Air Force, Judge Dredd),
+// not by the OBG table.
+const GAME_TYPES: GameType[] = ["Boardgame", "Wargame", "Refereed"];
 const DEFAULT_GAME_TYPE: GameType = "Wargame";
+const TYPE_LABELS: Record<GameType, string> = { Boardgame: "Boardgame", Wargame: "Wargame", Refereed: "Arbitrés" };
+const REFEREED_GAMES = [AIR_FORCE_TAB, JUDGE_DREDD_TAB];
 
 // type tab chosen by the player: read from ?type=Wargame, then kept there
 let selectedType: GameType | null = readGameType(
@@ -115,19 +127,22 @@ function readGameType(value: string | null | undefined): GameType | null {
 }
 
 function gameTypeOf(gameName: string): GameType {
+  if (REFEREED_GAMES.includes(gameName)) return "Refereed";
   return readGameType(gameInfo[gameName]?.type) ?? DEFAULT_GAME_TYPE;
 }
 
-// every game the server offers: one entry per game of sessions_info, plus Air
-// Force when Hautefort answers (a wargame: it has no entry in gameInfo)
+// every game the server offers: one entry per game of sessions_info, plus the
+// refereed games whose service answers (they have no entry in gameInfo)
 function offeredGameNames(): string[] {
   const names = Object.keys(sessionsData);
   if (airForceAvailable()) names.push(AIR_FORCE_TAB);
+  if (judgeDreddAvailable()) names.push(JUDGE_DREDD_TAB);
   return names.sort((a, b) => a.localeCompare(b));
 }
 
 function tabLabel(name: string): string {
   if (name === AIR_FORCE_TAB) return AIR_FORCE_LABEL;
+  if (name === JUDGE_DREDD_TAB) return JUDGE_DREDD_LABEL;
   return gameInfo[name]?.display_name || name.charAt(0).toUpperCase() + name.slice(1);
 }
 
@@ -695,7 +710,7 @@ function renderTypeTabs(): void {
     ...GAME_TYPES.map((type) => {
       const btn = document.createElement("button");
       btn.className = "type-tab" + (type === active ? " active" : "");
-      btn.textContent = type;
+      btn.textContent = TYPE_LABELS[type];
       btn.setAttribute("role", "tab");
       btn.setAttribute("aria-selected", String(type === active));
       btn.onclick = () => selectGameType(type);
@@ -740,9 +755,9 @@ function renderAll(): void {
     container.className = "table-container" + (index === activeIndex ? " active" : "");
     container.id = "table-" + index;
 
-    // Air Force games are played in Hautefort, not on the OBG table
-    if (name === AIR_FORCE_TAB) {
-      renderAirForceTab(container, searchQuery, pager, lockWhenFull);
+    // the refereed games are played in their own service, not on the OBG table
+    if (name === AIR_FORCE_TAB || name === JUDGE_DREDD_TAB) {
+      (name === AIR_FORCE_TAB ? renderAirForceTab : renderJudgeDreddTab)(container, searchQuery, pager, lockWhenFull);
       tablesContainer.appendChild(container);
       return;
     }
@@ -915,11 +930,13 @@ function bindEventHandlers(): void {
 function main(): void {
   bindEventHandlers();
   connectSharedSocket();
-  // an Air Force game filling or emptying changes the count of the platform too
-  startAirForceLobby(() => {
+  // a refereed game filling or emptying changes the count of the platform too
+  const refereedChanged = (): void => {
     renderAll();
     refreshSessions();
-  });
+  };
+  startAirForceLobby(refereedChanged);
+  startJudgeDreddLobby(refereedChanged);
 }
 
 main();
