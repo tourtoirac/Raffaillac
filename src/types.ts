@@ -537,6 +537,8 @@ export interface SessionParticipant {
   connected: boolean;
   /** the image before the name of a player (player_icons of the game); null or absent, none */
   icon?: string | null;
+  /** a watcher: whether the owner allowed it to talk in the voice channel (voice_allow) */
+  voice?: boolean;
 }
 
 export interface SessionPlayer {

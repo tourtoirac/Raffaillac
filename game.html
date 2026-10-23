@@ -363,6 +363,33 @@
       height: 100%;
       display: block;
     }
+    /* the microphone of the owner next to a watcher: lets it talk, and once
+       lit takes it back (voice_allow) */
+    #participants .voice-allow {
+      flex: none;
+      display: inline-flex;
+      width: 20px;
+      height: 18px;
+      margin-left: 6px;
+      padding: 1px 2px;
+      background: none;
+      border: 1px solid transparent;
+      border-radius: 3px;
+      color: #888;
+      cursor: pointer;
+    }
+    #participants .voice-allow:hover {
+      color: #eee;
+    }
+    #participants .voice-allow.active {
+      color: #ff8a80;
+      border-color: #ff8a80;
+    }
+    #participants .voice-allow svg {
+      width: 100%;
+      height: 100%;
+      display: block;
+    }
     /* the image the game gives a player (player_icons), before its name */
     #participants .player-icon {
       width: 18px;

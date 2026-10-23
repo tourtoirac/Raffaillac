@@ -247,6 +247,9 @@ function updateParticipants(received: SessionParticipant[] | undefined): void {
   }
   renderParticipants();
   updateChatPartners();
+  // a watcher the owner allowed to talk gets the voice buttons, and loses them
+  // when the owner takes it back
+  updateVoiceControls();
   // the players the hand can be shown to are those of that list
   renderShowSelect();
 }
@@ -349,6 +352,10 @@ function renderParticipants(): void {
       if (entry.nickname !== me && entry.role === "player") {
         line.append(followEyeButton(entry.nickname));
       }
+      // the microphone next to a watcher lets the owner allow it to talk
+      if (entry.role === "watcher" && isOwner && !isClosed) {
+        line.append(voiceAllowButton(entry));
+      }
       line.title = entry.nickname;
       line.dataset.nickname = entry.nickname;
       line.classList.add(entry.role === "watcher" ? "watcher" : "player");
@@ -413,7 +420,8 @@ function updateChatPartners(): void {
 // Voice channel
 // -------------------------------------------------
 // The players of the game talk to each other (src/voice.ts): the buttons are
-// at the top of the participants panel, a watcher has none.
+// at the top of the participants panel. A watcher has none, unless the owner
+// allowed it to talk (voice_allow, the microphone next to its name).
 
 const voiceControls = document.getElementById("voice-controls");
 const voiceJoinButton = document.getElementById("voice-join-button") as HTMLButtonElement | null;
@@ -452,9 +460,21 @@ function refreshVoiceDots(): void {
   dots.forEach((dot, index) => dot.classList.toggle("speaking", voice.speaking.has(shown[index])));
 }
 
+// a player talks; a watcher only once the owner allowed it
+function readerMayTalk(): boolean {
+  if (isClosed) return false;
+  if (!isWatcher) return true;
+  const me = loadPlayerIdentity()?.name;
+  return participants.some((entry) => entry.role === "watcher" && entry.nickname === me && entry.voice === true);
+}
+
 function updateVoiceControls(): void {
   if (!voiceControls || !voiceJoinButton || !voiceMuteButton) return;
-  voiceControls.hidden = isWatcher || isClosed;
+  const mayTalk = readerMayTalk();
+  // taken back by the owner: the server already took the reader out of the
+  // channel, the page hangs up and closes the microphone
+  if (!mayTalk && voice.joined) voice.leave();
+  voiceControls.hidden = !mayTalk;
   voiceJoinButton.textContent = voice.joined ? "Quitter l'audio" : "Rejoindre l'audio";
   voiceJoinButton.classList.toggle("active", voice.joined);
   voiceMuteButton.hidden = !voice.joined;
@@ -1907,6 +1927,40 @@ function toggleFollow(nickname: string): void {
     getSocket()?.send({ action: "follow", nickname });
   }
   renderParticipants();
+}
+
+// A microphone, and the same one struck through: what the button of the owner
+// next to a watcher does next (let it talk, or take it back).
+const micIcon =
+  '<svg viewBox="0 0 24 24" aria-hidden="true" fill="none" stroke="currentColor" stroke-width="2" ' +
+  'stroke-linecap="round"><rect x="9" y="3" width="6" height="11" rx="3"/><path d="M5 11a7 7 0 0 0 14 0M12 18v3"/></svg>';
+const micOffIcon =
+  '<svg viewBox="0 0 24 24" aria-hidden="true" fill="none" stroke="currentColor" stroke-width="2" ' +
+  'stroke-linecap="round"><rect x="9" y="3" width="6" height="11" rx="3"/>' +
+  '<path d="M5 11a7 7 0 0 0 14 0M12 18v3M3 3l18 18"/></svg>';
+
+// The owner lets a watcher talk in the voice channel, or takes it back
+// (voice_allow): every screen gets the new participants with a session_status,
+// and the button changes with them.
+function voiceAllowButton(entry: SessionParticipant): HTMLButtonElement {
+  const allowed = entry.voice === true;
+  const button = document.createElement("button");
+  button.type = "button";
+  button.className = "voice-allow";
+  button.classList.toggle("active", allowed);
+  button.innerHTML = allowed ? micOffIcon : micIcon;
+  button.title = allowed
+    ? `Retirer ${entry.nickname} du salon audio`
+    : `Autoriser ${entry.nickname} à parler dans le salon audio`;
+  button.draggable = false;
+  button.addEventListener("click", (event) => {
+    event.stopPropagation();
+    button.disabled = true;
+    const message = { action: "voice_allow", nickname: entry.nickname, allowed: !allowed };
+    getSocket()?.send(message);
+    console.log("[WS] Envoyé :", JSON.stringify(message));
+  });
+  return button;
 }
 
 function followEyeButton(nickname: string): HTMLButtonElement {

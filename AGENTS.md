@@ -340,8 +340,15 @@ sièges, puis les spectateurs. Couleurs dans `game.html` : joueur à la table en
 vert, joueur absent (`.absent`) en rouge, spectateur en bleu.
 
 Salon audio (`voice.ts`, section *Voice channel* de `game.ts`) : en haut de
-`#participants`, `#voice-controls` (masqué pour un spectateur et une partie
-close) porte « Rejoindre l'audio » / « Quitter l'audio » et le bouton du micro.
+`#participants`, `#voice-controls` (masqué pour une partie close, et pour un
+spectateur que l'owner n'a pas autorisé : `readerMayTalk`, lu dans le `voice`
+de son entrée de `participants`) porte « Rejoindre l'audio » / « Quitter
+l'audio » et le bouton du micro. L'owner a un micro (`voiceAllowButton`,
+`.voice-allow`) en face de chaque spectateur : il envoie `voice_allow`
+`{nickname, allowed}` ; allumé et barré une fois le spectateur autorisé, il
+le retire alors du salon (demande de l'utilisateur du 23/10/2026). Le
+spectateur dont l'autorisation est retirée raccroche et perd ses boutons
+(`updateVoiceControls`, appelé à chaque liste de participants).
 `VoiceChat.join` ouvre le micro (`getUserMedia`, **contexte sécurisé
 obligatoire** : https ou localhost, sinon bouton désactivé) puis envoie
 `voice_join` ; `voice_joined` → `onJoined` appelle chaque `peers` (offre
