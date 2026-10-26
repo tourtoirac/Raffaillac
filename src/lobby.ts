@@ -12,6 +12,21 @@ import {
   renderJudgeDreddTab,
   startJudgeDreddLobby,
 } from "./judgeDreddLobby";
+import {
+  MONSTER_DERBY_LABEL,
+  MONSTER_DERBY_TAB,
+  monsterDerbyAvailable,
+  renderMonsterDerbyTab,
+  startMonsterDerbyLobby,
+} from "./monsterDerbyLobby";
+import {
+  SUPER_SLAPSHOT_LABEL,
+  SUPER_SLAPSHOT_TAB,
+  renderSuperSlapshotTab,
+  startSuperSlapshotLobby,
+  superSlapshotAvailable,
+} from "./superSlapshotLobby";
+import { ZARGOS_LABEL, ZARGOS_TAB, renderZargosTab, startZargosLobby, zargosAvailable } from "./zargosLobby";
 import { GAME_OPEN_ELSEWHERE_MESSAGE, isGameOpenElsewhere } from "./gameLock";
 import { gameEntryUrl } from "./navigation";
 import { storePlayerIdentity, storeSession } from "./session";
@@ -115,7 +130,7 @@ function selectedGameIndex(gameNames: string[]): number {
 const GAME_TYPES: GameType[] = ["Boardgame", "Wargame", "Refereed"];
 const DEFAULT_GAME_TYPE: GameType = "Wargame";
 const TYPE_LABELS: Record<GameType, string> = { Boardgame: "Boardgame", Wargame: "Wargame", Refereed: "Arbitrés" };
-const REFEREED_GAMES = [AIR_FORCE_TAB, JUDGE_DREDD_TAB];
+const REFEREED_GAMES = [AIR_FORCE_TAB, JUDGE_DREDD_TAB, MONSTER_DERBY_TAB, SUPER_SLAPSHOT_TAB, ZARGOS_TAB];
 
 // type tab chosen by the player: read from ?type=Wargame, then kept there
 let selectedType: GameType | null = readGameType(
@@ -137,13 +152,20 @@ function offeredGameNames(): string[] {
   const names = Object.keys(sessionsData);
   if (airForceAvailable()) names.push(AIR_FORCE_TAB);
   if (judgeDreddAvailable()) names.push(JUDGE_DREDD_TAB);
+  if (monsterDerbyAvailable()) names.push(MONSTER_DERBY_TAB);
+  if (superSlapshotAvailable()) names.push(SUPER_SLAPSHOT_TAB);
+  if (zargosAvailable()) names.push(ZARGOS_TAB);
   return names.sort((a, b) => a.localeCompare(b));
 }
 
 function tabLabel(name: string): string {
   if (name === AIR_FORCE_TAB) return AIR_FORCE_LABEL;
   if (name === JUDGE_DREDD_TAB) return JUDGE_DREDD_LABEL;
-  return gameInfo[name]?.display_name || name.charAt(0).toUpperCase() + name.slice(1);
+  if (name === MONSTER_DERBY_TAB) return MONSTER_DERBY_LABEL;
+  if (name === SUPER_SLAPSHOT_TAB) return SUPER_SLAPSHOT_LABEL;
+  if (name === ZARGOS_TAB) return ZARGOS_LABEL;
+  const game = gameInfo[name];
+  return game?.thumbnail_display || game?.display_name || name.charAt(0).toUpperCase() + name.slice(1);
 }
 
 // The type tab shown: the one the player chose, else the one of the game the
@@ -756,8 +778,12 @@ function renderAll(): void {
     container.id = "table-" + index;
 
     // the refereed games are played in their own service, not on the OBG table
-    if (name === AIR_FORCE_TAB || name === JUDGE_DREDD_TAB) {
-      (name === AIR_FORCE_TAB ? renderAirForceTab : renderJudgeDreddTab)(container, searchQuery, pager, lockWhenFull);
+    if (REFEREED_GAMES.includes(name)) {
+      const renderTab = name === AIR_FORCE_TAB ? renderAirForceTab
+        : name === JUDGE_DREDD_TAB ? renderJudgeDreddTab
+        : name === MONSTER_DERBY_TAB ? renderMonsterDerbyTab
+        : name === SUPER_SLAPSHOT_TAB ? renderSuperSlapshotTab : renderZargosTab;
+      renderTab(container, searchQuery, pager, lockWhenFull);
       tablesContainer.appendChild(container);
       return;
     }
@@ -767,6 +793,7 @@ function renderAll(): void {
       table.innerHTML = `
         <thead>
           <tr>
+            <th>Jeu</th>
             <th>Code</th>
             <th>Joueurs</th>
             <th>Rejoindre</th>
@@ -778,6 +805,9 @@ function renderAll(): void {
       const tbody = table.querySelector("tbody") as HTMLTableSectionElement;
       for (const session of pager.slice(name, sessions)) {
         const row = document.createElement("tr");
+        // the game or the variant the session plays
+        const gameCell = document.createElement("td");
+        gameCell.textContent = session.display_name || game?.display_name || name;
         const codeCell = document.createElement("td");
         codeCell.textContent = session.code || "-";
 
@@ -838,6 +868,7 @@ function renderAll(): void {
           actionCell.appendChild(lockWhenFull(watchBtn));
         }
 
+        row.appendChild(gameCell);
         row.appendChild(codeCell);
         row.appendChild(playersCell);
         row.appendChild(actionCell);
@@ -851,7 +882,8 @@ function renderAll(): void {
       container.appendChild(emptyListMessage(searchQuery));
     }
 
-    if (variantKeys.length > 1) {
+    // an inactive game offers only its active variants: always name them in the menu
+    if (variantKeys.length > 1 || (variantKeys.length === 1 && variantKeys[0] !== "default")) {
       const dropdown = document.createElement("div");
       dropdown.className = "create-dropdown";
       dropdown.innerHTML = `
@@ -937,6 +969,9 @@ function main(): void {
   };
   startAirForceLobby(refereedChanged);
   startJudgeDreddLobby(refereedChanged);
+  startMonsterDerbyLobby(refereedChanged);
+  startSuperSlapshotLobby(refereedChanged);
+  startZargosLobby(refereedChanged);
 }
 
 main();

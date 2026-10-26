@@ -75,10 +75,12 @@ interface Catalog {
 let games: AirForceGame[] = [];
 let catalog: Catalog | null = null;
 let connected = false;
+// an administrator may turn the module off (OBG /manage/ pages): its tab goes away
+let active = true;
 let rerender: () => void = () => {};
 
 export function airForceAvailable(): boolean {
-  return connected;
+  return connected && active;
 }
 
 // the games Hautefort lists (not finished, not archived)
@@ -108,9 +110,11 @@ export function startAirForceLobby(onChange: () => void): void {
     url.protocol = url.protocol === "https:" ? "wss:" : "ws:";
     const ws = new WebSocket(url);
     ws.onmessage = (e) => {
-      const data = JSON.parse(e.data as string) as { event: string; games?: AirForceGame[] };
+      const data = JSON.parse(e.data as string) as { event: string; games?: AirForceGame[]; active?: boolean };
       if (data.event !== "games") return;
       games = data.games ?? [];
+      // absent from an older Hautefort: the module is on
+      active = data.active !== false;
       connected = true;
       delay = 2000;
       rerender();

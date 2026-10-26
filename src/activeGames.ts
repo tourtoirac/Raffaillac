@@ -11,6 +11,21 @@ import {
   judgeDreddMatches,
   startJudgeDreddLobby,
 } from "./judgeDreddLobby";
+import {
+  MONSTER_DERBY_LABEL,
+  MONSTER_DERBY_TAB,
+  monsterDerbyGames,
+  monsterDerbyMatches,
+  startMonsterDerbyLobby,
+} from "./monsterDerbyLobby";
+import {
+  SUPER_SLAPSHOT_LABEL,
+  SUPER_SLAPSHOT_TAB,
+  startSuperSlapshotLobby,
+  superSlapshotGames,
+  superSlapshotMatches,
+} from "./superSlapshotLobby";
+import { ZARGOS_LABEL, ZARGOS_TAB, startZargosLobby, zargosGames, zargosMatches } from "./zargosLobby";
 import { lobbyReturnUrl } from "./navigation";
 import { Pager, emptyListMessage, matchesSearch } from "./sessionList";
 import type { ActiveSession, GameInfo, ListGameEvent, SessionsInfoEvent } from "./types";
@@ -74,6 +89,36 @@ function rows(): Row[] {
     all.push({
       gameName: JUDGE_DREDD_TAB,
       gameLabel: JUDGE_DREDD_LABEL,
+      code: game.code,
+      players: game.players.map((p) => ({ nickname: p.nickname, owner: p.owner, connected: p.connected })),
+      started: game.status !== "waiting",
+    });
+  }
+  for (const game of monsterDerbyGames()) {
+    if (!monsterDerbyMatches(game, searchQuery)) continue;
+    all.push({
+      gameName: MONSTER_DERBY_TAB,
+      gameLabel: MONSTER_DERBY_LABEL,
+      code: game.code,
+      players: game.players.map((p) => ({ nickname: p.nickname, owner: p.owner, connected: p.connected })),
+      started: game.status !== "waiting",
+    });
+  }
+  for (const game of superSlapshotGames()) {
+    if (!superSlapshotMatches(game, searchQuery)) continue;
+    all.push({
+      gameName: SUPER_SLAPSHOT_TAB,
+      gameLabel: SUPER_SLAPSHOT_LABEL,
+      code: game.code,
+      players: game.players.map((p) => ({ nickname: p.nickname, owner: p.owner, connected: p.connected })),
+      started: game.status !== "waiting",
+    });
+  }
+  for (const game of zargosGames()) {
+    if (!zargosMatches(game, searchQuery)) continue;
+    all.push({
+      gameName: ZARGOS_TAB,
+      gameLabel: ZARGOS_LABEL,
       code: game.code,
       players: game.players.map((p) => ({ nickname: p.nickname, owner: p.owner, connected: p.connected })),
       started: game.status !== "waiting",
@@ -190,3 +235,6 @@ const refereedChanged = (): void => {
 };
 startAirForceLobby(refereedChanged);
 startJudgeDreddLobby(refereedChanged);
+startMonsterDerbyLobby(refereedChanged);
+startSuperSlapshotLobby(refereedChanged);
+startZargosLobby(refereedChanged);

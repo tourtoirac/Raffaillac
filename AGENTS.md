@@ -50,7 +50,7 @@ prétendre avoir couvert une régression. La seule vérification possible est
 | `airForceLobby.ts` `judgeDreddLobby.ts` `serviceModal.ts` | Onglets des jeux arbitrés (modules de Hautefort) et ce qu'ils partagent (voir § Lobby) |
 | `sessionList.ts`   | Recherche par code ou pseudo (`matchesSearch`) et pagination à 10 sessions (`Pager`, une page par jeu), pour le lobby et `parties.html` |
 | `types.ts`         | Contrat de protocole — lire en premier |
-| `engine/bag.ts` `board.ts` `button.ts` `counter.ts` `counter_box.ts` `dice.ts` `mw_character.ts` | Modèle et dessin des composants |
+| `engine/bag.ts` `board.ts` `button.ts` `counter.ts` `counter_box.ts` `dice.ts` `mw_character.ts` `secret_choice.ts` | Modèle et dessin des composants |
 | `engine/hex_grid.ts` | Grille hexagonale d'un plateau (`grid` du `game_json`) : même calcul que `Tourtoirac/Components/hex_grid.py` |
 | `ws/wsClient.ts` `wsWorker.ts` | WebSocket, exécuté dans un **SharedWorker** |
 | `voice.ts`         | Salon audio : WebRTC entre joueurs (`VoiceChat`), relayé par Tourtoirac |
@@ -86,6 +86,7 @@ Les noms ne correspondent pas : c'est le piège principal.
 | `stack`   | `Stack`   | `Deck` avec `isStack` (`engine/deck.ts`) | `DeckItem` (`kind: "stack"`) |
 | `card`    | `Card`    | `Counter` avec `isCard` | `TokenItem` (`kind: "card"`) |
 | `mw_character` | `MwCharacter` | `MwCharacter` (interface, `engine/mw_character.ts`) | `MwCharacterItem` |
+| `secret_choice` | `SecretChoice` | `SecretChoice` (interface, `engine/secret_choice.ts`) | `SecretChoiceItem` |
 | `generator` | `Generator` | aucun objet du moteur : colonne HTML `#generators` (`renderGenerators`) | `GeneratorItem`, `GeneratorModel` |
 
 Dans `game.ts`, `counters` / `countersById` / `hand` désignent donc des
@@ -142,6 +143,42 @@ serveur.
   exception : les onglets des jeux arbitrés, qui parlent à Hautefort (voir
   § Lobby).
 
+### Onglet Monster Derby
+
+`src/monsterDerbyLobby.ts` (modèle de `judgeDreddLobby.ts`) : onglet
+`monster_derby_refereed` parmi les « Arbitrés », module `hautefort/monsterderby/`.
+Le formulaire de création demande le nombre de créatures (6 à 15), de
+plateaux (2 à 5) et le set de pions (legacy, fantasy, dark, gore) ; pas de
+choix de couleur, le module la donne. Branché dans `lobby.ts`
+(`REFEREED_GAMES`) et `activeGames.ts`.
+
+### Onglet Super Slapshot
+
+`src/superSlapshotLobby.ts` (modèle de `monsterDerbyLobby.ts`) : onglet
+`super_slapshot_refereed` parmi les « Arbitrés », module
+`hautefort/superslapshot/` (créé le 26/10/2026). Pas d'option à la création
+(règles de base) ; 2 à 7 managers, couleur donnée par le module. La version
+table du jeu (`Super_Slapshot` dans Chabanas) a été supprimée le 26/10/2026. Branché dans
+`lobby.ts` (`REFEREED_GAMES`) et `activeGames.ts`.
+
+### Onglet Zargos
+
+`src/zargosLobby.ts` (modèle de `superSlapshotLobby.ts`) : onglet `zargos_refereed`
+parmi les « Arbitrés », module `hautefort/zargos/` (créé le 26/10/2026). Pas d'option à
+la création ; 2 à 6 joueurs, couleur donnée par le module. La version table du jeu
+(`Zargos` dans Chabanas) garde son onglet. Branché dans `lobby.ts` (`REFEREED_GAMES`)
+et `activeGames.ts`.
+
+### Administration d'OBG
+
+Les pages `manage/` de Chabanas ouvrent `game.html?game=<jeu>#admin={"key","code"}` :
+`session.ts` `adoptAdminSession` range la session et l'identité
+(`Administrateur`, rôle `admin`) puis efface le fragment ; `resume_session`
+part avec `role: "admin"` et le serveur répond `watcher`. `session_closed`
+avec `by_admin` affiche « Le jeu est clos par l'administrateur »,
+`session_deleted` « La partie a été supprimée par l'administrateur » puis
+renvoie au lobby (`adminNotice.ts`). Le nginx renvoie 404 sur `/hautefort/admin/`.
+
 ### Parcours d'un joueur
 
 1. **`lobby.ts` → `main()`** : à la connexion envoie `list_game`, sans
@@ -193,7 +230,7 @@ titre :
 | *Main* (fin) | Sac : `requestPick` envoie `pick` (avec un `request_id`), `applyPick` remet le pion tiré dans `counters` et, pour celui qui a cliqué, dans `hand`, sous le pointeur ; `putInBag` retire de la table un pion relâché sur un sac (`release` avec `bag_id`) |
 | *Generators* (dans la section de la main privée) | Colonne `#generators` de `game.html` (50 px, collée à gauche de `#participants`, masquée sans générateur) : un `<img>` par modèle, sur la face de son `side` (le serveur n'envoie que celle-là). Comme une carte de la main privée : bouton gauche enfoncé sur un modèle → `armedModel` (jamais pour un spectateur ni une partie close) ; le pointeur qui atteint la table, bouton toujours enfoncé → `requestGenerate` (`generate` avec `request_id`, `pending` `"generate"`) ; l'événement `generate` passe par `applyPick` (la copie inconnue est créée par `createCounter`). Au lâcher au-dessus de la colonne (`overGenerators`), `dropHand(false, null, true)` envoie chaque `release` avec `generator: true` ; un `release` qui porte `generator_id` retire la copie de `counters` et de `countersById`. La colonne s'éclaire (`drop-target`) pendant qu'on y porte des pions |
 | *Souris* | `onMouseDown` / `Move` / `Up` : **bouton gauche** = clic sur une zone de rotation, de compteur ou de dé → `request*` ; bouton gauche **enfoncé** sur un pion → `requestAcquire` (sur un sac → `requestPick`), déplacement tant qu'il reste enfoncé, bouton **relâché** → `dropHand` → `requestRelease` (`mouseup` écouté aussi sur `window`). Une main restée pleine sans bouton enfoncé (session reprise) est reprise par le prochain appui ; **bouton droit enfoncé** = déplacement de la caméra (seul moyen, menu contextuel désactivé sur le canvas) ; bouton central ignoré |
-| *Hex grid* | Aperçu de l'hexagone visé par un pion tenu (`predictedHex`, miroir de `Session.snap_to_grid`), grille de calibrage affichée par la touche **G** avec la position du pointeur relative au plateau |
+| *Hex grid* | Aperçu de l'hexagone visé par un pion tenu (`predictedHex`, miroir de `Session.snap_to_grid` ; aucun pour un pion `ignore_magnetism`, `Counter.ignoreMagnetism`), grille de calibrage affichée par la touche **G** avec la position du pointeur relative au plateau |
 | *Dessin* | `draw()` : plateaux, compteurs, sacs (avec le nombre de pions restants), dés, pions, boutons, infobulles |
 | *Stack preview* | `drawStackPreview` : fenêtre en pixels d'écran ouverte au survol d'au moins deux pions superposés (`countersAt`), qui les montre dans l'ordre de la pile (voir aussi `revealsFront`, § Nationalités). `drawStackCount` y ajoute, à cheval sur le bord haut à droite, une pastille avec le nombre de pions de la pile (même aspect que `.hand-count` de `game.html`) |
 | *Messages du serveur Tourtoirac* | `handleServerMessage` : une branche `if/else` par `event` → fonctions `apply*` |
@@ -514,7 +551,11 @@ n'a plus aucun bouton à montrer.
 Le serveur annonce la
 nationalité du siège dans `session_joined` (`myNationality` dans `game.ts`,
 affichée dans le bandeau après le pseudo) ; le lobby l'affiche après chaque
-pseudo. `Counter.nationality` reprend celle du pion (`TokenItem.nationality`),
+pseudo. `Counter.nationality` reprend celle du pion (`TokenItem.nationality`) :
+une liste de camps ou `null` (`engine/nationality.ts` : `readNationality` lit
+aussi un texte seul, ancien format ; `nationalityAllows` = sans camp ou camp du
+joueur listé, `nationalityIncludes` = camp du joueur listé). Même lecture pour
+`MwCharacter`, `SecretChoice` et les modèles d'un générateur.
 `Session.player_nationalities` celle de chaque siège : c'est là que viendront
 se brancher les règles.
 
@@ -549,6 +590,22 @@ enfoncé sur un personnage qui a des cartes : `armedCharacter`, puis dès que
 le pointeur s'éloigne (`LONG_PRESS_SLACK`) `requestCharacterPick` envoie
 `pick` et la carte suit le pointeur comme un tirage dans un sac ; un simple
 clic ou un double clic ne prend rien.
+
+### Choix secret (`secret_choice`)
+
+`secretChoices` / `secretChoicesById`, dessinés sur le plateau sous les pions
+(`drawSecretChoice`, aussi dans la copie d'écran). La tuile montre la valeur
+quand l'écran la connaît (le serveur l'envoie à `null` sinon), sinon son dos :
+un œil sur fond sombre, cadre vert une fois validée. `choosesSecret` dit si
+l'écran est celui d'un joueur du camp ; seul celui-là a, sous la tuile,
+l'icône d'action (`pendingAction`) : ✓ une fois une valeur choisie, puis
+l'œil qui la révèle. Clic (main vide) : `hitSecretChoice` donne la tuile ou
+l'icône ; la tuile ouvre le menu DOM `.secret-choice-menu`
+(`openSecretChoiceMenu`, sous la tuile, fermé par un choix, Escape, la
+molette ou tout autre clic) qui envoie `choose` ; l'icône envoie
+`validate_choice` puis `reveal_choice`. Mêmes refus que `characterRefused`
+(`secretChoiceRefused`). L'événement `secret_choice` passe par
+`applySecretChoice`. Cadres : jaune choisi, vert validé, rouge révélé.
 
 ### Ajouter un type de composant
 
@@ -602,3 +659,15 @@ développement, `server.fs.allow` de `vite.config.ts` autorise ce dossier.
 - Une classe par composant de `engine/`, état mutable quand le repositionnement
   l'exige (cf. `CounterBox.x`/`.y`, modifiables pour le setup).
 - `dist/` est ignoré par git — ne jamais le committer.
+
+## Configurable piece rotation
+
+`TokenItem.rotation_step` describes the server's rotation increment (default
+45 degrees, Aboukir 60). It is a positive integer divisor of 360. The client
+continues to send only `left` / `right` and renders the `orientation` returned
+by Tourtoirac; there is no local angle prediction to adjust.
+
+Two quick presses on the rotation zones make the browser fire `dblclick`:
+`onDoubleClick` ignores it for `ROTATION_DOUBLE_CLICK_GUARD_MS` (1 s) after
+any press on a rotation zone (`lastRotationPressAt`), so a fast rotation never
+turns a two-sided token over.

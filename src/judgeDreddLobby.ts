@@ -58,10 +58,12 @@ interface Catalog {
 let games: JudgeDreddGame[] = [];
 let colors: { key: string; name: string }[] = [];
 let connected = false;
+// an administrator may turn the module off (OBG /manage/ pages): its tab goes away
+let active = true;
 let rerender: () => void = () => {};
 
 export function judgeDreddAvailable(): boolean {
-  return connected;
+  return connected && active;
 }
 
 // the games the module lists (not finished, not archived)
@@ -91,9 +93,11 @@ export function startJudgeDreddLobby(onChange: () => void): void {
     url.protocol = url.protocol === "https:" ? "wss:" : "ws:";
     const ws = new WebSocket(url);
     ws.onmessage = (e) => {
-      const data = JSON.parse(e.data as string) as { event: string; games?: JudgeDreddGame[] };
+      const data = JSON.parse(e.data as string) as { event: string; games?: JudgeDreddGame[]; active?: boolean };
       if (data.event !== "games") return;
       games = data.games ?? [];
+      // absent from an older Hautefort: the module is on
+      active = data.active !== false;
       connected = true;
       delay = 2000;
       rerender();

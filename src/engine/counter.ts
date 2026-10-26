@@ -1,3 +1,5 @@
+import type { Nationality } from "./nationality";
+
 /** part de la largeur et de la hauteur du pion que occupe chaque zone */
 export const ROTATION_ZONE_RATIO = 0.2;
 
@@ -69,12 +71,14 @@ export class Counter {
   /** face affichée : le serveur en est seul juge */
   side: CounterSide;
   /** the side the token belongs to, among the nationalities of the game */
-  nationality: string | null = null;
+  nationality: Nationality = null;
   /**
    * in the stack preview, the players of another nationality and the watchers
    * see the counters under this one with its face instead of their own
    */
   blockSight = false;
+  /** a marker (turn, victory points...) released where it is dropped, never on a hex */
+  ignoreMagnetism = false;
   /** a card is handled like a token, and is the only thing a deck accepts */
   isCard = false;
 

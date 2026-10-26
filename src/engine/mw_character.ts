@@ -1,3 +1,5 @@
+import { readNationality } from "./nationality";
+import type { Nationality } from "./nationality";
 import type { MwCharacterColumnItem, MwCharacterItem, TokenItem } from "../types";
 
 // An mw_character is a card that never moves, with a column of boxes on each
@@ -49,8 +51,8 @@ export interface MwCharacter {
   readonly front: HTMLImageElement;
   readonly back: HTMLImageElement | null;
   side: "front" | "back";
-  /** only the players of this nationality mark and turn it; null, anybody */
-  readonly nationality: string | null;
+  /** only the players of these nationalities mark and turn it; null, anybody */
+  readonly nationality: Nationality;
   readonly columns: Partial<Record<MwCharacterColumnName, MwCharacterColumn>>;
   /** the cards under it, the last one put (the first taken back) at the end */
   cards: CharacterCard[];
@@ -101,7 +103,7 @@ export function createMwCharacter(item: MwCharacterItem): MwCharacter {
     front: loadImage(item.front_src) ?? new Image(),
     back: loadImage(item.back_src),
     side: item.side === "back" && item.back_src ? "back" : "front",
-    nationality: item.nationality ?? null,
+    nationality: readNationality(item.nationality),
     columns,
     cards: readCharacterCards(item.cards),
   };

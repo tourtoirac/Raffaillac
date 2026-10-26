@@ -80,13 +80,18 @@ export interface TokenItem {
   back_src?: string | null;
   /** face affichée, telle que le serveur l'a rendue */
   side?: "front" | "back";
-  /** the side the token belongs to, among the nationalities of the game */
-  nationality?: string | null;
+  /**
+   * the sides the token belongs to, among the nationalities of the game; a
+   * single name from an older Tourtoirac is read as a list of one
+   */
+  nationality?: string[] | string | null;
   /**
    * in the stack preview, hides the tokens under this one from the players of
    * another nationality and from the watchers
    */
   block_sight?: boolean;
+  /** released where it is dropped, never pulled onto a hex; absent: false */
+  ignore_magnetism?: boolean;
   /** null as long as the token waits inside a bag */
   x: number | null;
   y: number | null;
@@ -106,6 +111,8 @@ export interface TokenItem {
   in_place?: boolean;
   /** le jeu autorise-t-il les zones de rotation sur ce pion */
   orientable?: boolean;
+  /** Rotation step in degrees: a positive integer divisor of 360; default 45. */
+  rotation_step?: number;
   /** angle courant, en degrés vers la droite */
   orientation?: number;
   /**
@@ -324,8 +331,8 @@ export interface MwCharacterItem {
   front_src: string;
   back_src: string | null;
   side: "front" | "back";
-  /** only the players of this nationality mark it and turn it over */
-  nationality: string | null;
+  /** only the players of these nationalities mark it and turn it over */
+  nationality: string[] | string | null;
   /** absent when the game declares no usable column on that side */
   left?: MwCharacterColumnItem;
   right?: MwCharacterColumnItem;
@@ -333,9 +340,39 @@ export interface MwCharacterItem {
   cards?: TokenItem[];
 }
 
+/**
+ * A secret_choice: the players of one nationality choose a value among a few,
+ * validate it, then reveal it (the Shadow Points letter of War of the Ring).
+ * choice is null for whoever may not know it yet: the server keeps it back.
+ */
+export interface SecretChoiceItem {
+  kind: "secret_choice";
+  id: string;
+  x: number;
+  y: number;
+  width: number;
+  height: number;
+  choices: string[];
+  /** only the players of these nationalities choose; null, any player */
+  nationality: string[] | string | null;
+  choice: string | null;
+  validated: boolean;
+  revealed: boolean;
+}
+
+export type SecretChoiceAction = "choose" | "validate_choice" | "reveal_choice";
+
+export interface SecretChoiceEvent {
+  event: "secret_choice";
+  component_id: string;
+  action: SecretChoiceAction;
+  nickname: string;
+  component_json: SecretChoiceItem;
+}
+
 export interface SessionComponents {
   // a board, a counter, a dice pool, a bag, a deck, a stack, an mw_character: whatever does not move with the tokens
-  fixed: (BoardItem | BoardGroupItem | CounterItem | DicePoolItem | BagItem | DeckItem | MwCharacterItem | GeneratorItem)[];
+  fixed: (BoardItem | BoardGroupItem | CounterItem | DicePoolItem | BagItem | DeckItem | MwCharacterItem | GeneratorItem | SecretChoiceItem)[];
   movable: TokenItem[];
   // absent d'un Tourtoirac plus ancien : le dé est donc facultatif
   dice?: DiceItem[];
@@ -572,6 +609,8 @@ export interface GameInfo {
   name: string;
   /** what the lobby shows; absent from an older Chabanas: the name is shown */
   display_name?: string;
+  /** the label of the game tab of the lobby; absent from an older Chabanas: display_name */
+  thumbnail_display?: string;
   /** absent from an older Chabanas: the game is then filed as a wargame */
   type?: GameType;
   variant?: Record<string, GameVariantInfo>;
@@ -579,6 +618,8 @@ export interface GameInfo {
 
 export interface ActiveSession {
   code?: string;
+  /** what the session plays: the display_name of its variant, or of the game */
+  display_name?: string;
   players?: SessionPlayer[];
   max_players?: number;
   max_watchers?: number;
@@ -630,6 +671,13 @@ export interface SessionStatusEvent {
 // la partie a été archivée : plus rien n'y bouge, tout le monde regarde
 export interface SessionClosedEvent {
   event: "session_closed";
+  // closed by the administration of OBG, not by the owner
+  by_admin?: boolean;
+}
+
+// the administration of OBG deleted the game: nobody is in it any more
+export interface SessionDeletedEvent {
+  event: "session_deleted";
 }
 
 // refus du serveur, always reported with a stable code the client can test

@@ -41,6 +41,17 @@ import {
   readCharacterCards,
 } from "./engine/mw_character";
 import type { MwCharacter } from "./engine/mw_character";
+import { nationalityAllows, nationalityIncludes, nationalityLabel, readNationality } from "./engine/nationality";
+import {
+  canChoose,
+  createSecretChoice,
+  drawSecretChoice,
+  hitSecretChoice,
+  pendingAction,
+  secretChoiceBounds,
+  updateSecretChoice,
+} from "./engine/secret_choice";
+import type { SecretChoice, SecretChoiceTarget } from "./engine/secret_choice";
 import type { DicePool } from "./engine/dice";
 // shared with the other OBG front ends: OBG/Common/resources
 import flipHandIcon from "../../Common/resources/flip_hand.svg";
@@ -51,7 +62,8 @@ import eyeIcon from "../../Common/resources/eye.svg?raw";
 import { lobbyReturnUrl, originGameName } from "./navigation";
 import { acquireGameLock, GAME_OPEN_ELSEWHERE_MESSAGE } from "./gameLock";
 import { invalidComponentMessage, serverFullMessage } from "./serverErrors";
-import { clearSession, loadPlayerIdentity, loadSession, storeSession } from "./session";
+import { adoptAdminSession, clearSession, loadPlayerIdentity, loadSession, storeSession } from "./session";
+import { CLOSED_BY_ADMIN_MESSAGE, DELETED_BY_ADMIN_MESSAGE, showAdminPopup } from "./adminNotice";
 import type {
   AcquireEvent,
   BagItem,
@@ -62,6 +74,8 @@ import type {
   CounterValueEvent,
   MarkEvent,
   MwCharacterItem,
+  SecretChoiceEvent,
+  SecretChoiceItem,
   DealEvent,
   ShowEvent,
   GiveEvent,
@@ -99,6 +113,7 @@ import type {
   SetupEvent,
   TakeEvent,
   TokenItem,
+  SessionClosedEvent,
 } from "./types";
 import { getSocket } from "./ws/wsClient";
 import { ChatPanel } from "./chat";
@@ -207,6 +222,8 @@ fitCanvasSize();
 // Lecture de la session
 // -------------------------------------------------
 
+// the administration of OBG brings the session to watch in the address
+adoptAdminSession();
 let currentSession: Session | null = loadSession();
 
 // seul le créateur de la partie peut l'archiver. Le serveur l'annonce dans
@@ -983,8 +1000,7 @@ function requestGenerate(generator: GeneratorItem, model: GeneratorModel, x: num
     return;
   }
   // the copy would belong to a nationality this player may not touch
-  const nationality = model.nationality ?? null;
-  if (nationality !== null && nationality !== myNationality) {
+  if (!nationalityAllows(readNationality(model.nationality), myNationality)) {
     showInfoMessage("Ce pion appartient à une autre nationalité");
     return;
   }
@@ -1116,6 +1132,11 @@ const counterBoxesById = new Map<string, CounterBox>();
 let mwCharacters: MwCharacter[] = [];
 const mwCharactersById = new Map<string, MwCharacter>();
 
+// secret_choice components are "fixed": a value chosen in secret by the
+// players of one nationality, validated, then revealed to everybody
+let secretChoices: SecretChoice[] = [];
+const secretChoicesById = new Map<string, SecretChoice>();
+
 // un dé se lance d'un clic : ni prenable ni déplaçable
 let dices: Dice[] = [];
 const dicesById = new Map<string, Dice>();
@@ -1181,6 +1202,14 @@ function loadComponents(components: SessionComponents | undefined): void {
     .map((item) => createMwCharacter(item as MwCharacterItem));
   for (const character of mwCharacters) {
     mwCharactersById.set(character.name, character);
+  }
+
+  secretChoicesById.clear();
+  secretChoices = (components?.fixed ?? [])
+    .filter((item) => item.kind === "secret_choice")
+    .map((item) => createSecretChoice(item as SecretChoiceItem));
+  for (const secret of secretChoices) {
+    secretChoicesById.set(secret.name, secret);
   }
 
   countersById.clear();
@@ -1300,8 +1329,9 @@ function createCounter(token: TokenItem): Counter {
   // le rectangle vert vient du serveur ; absent, un pion repositionnable
   // commence sur sa case de départ
   if (typeof token.in_place === "boolean") counter.inPlace = token.in_place;
-  counter.nationality = token.nationality ?? null;
+  counter.nationality = readNationality(token.nationality);
   counter.blockSight = token.block_sight === true;
+  counter.ignoreMagnetism = token.ignore_magnetism === true;
   counter.isCard = token.kind === "card";
   return counter;
 }
@@ -1513,6 +1543,7 @@ function topBoardAt(x: number, y: number): Board | null {
 // the board and hex center a held counter would be snapped onto if released
 // now, mirroring Session.snap_to_grid on the server; null when it would not
 function predictedHex(counter: Counter): { board: Board; center: [number, number] } | null {
+  if (counter.ignoreMagnetism) return null;
   if (counter.moveBorder && nearStartingSquare(counter, counter.x, counter.y)) return null;
   const centerX = counter.x + counter.width / 2;
   const centerY = counter.y + counter.height / 2;
@@ -1609,6 +1640,7 @@ function gridCalibrationText(): string {
 }
 
 function onKeyDown(event: KeyboardEvent): void {
+  if (event.key === "Escape") closeSecretChoiceMenu();
   if (event.ctrlKey || event.metaKey || event.altKey) return;
   const target = event.target as HTMLElement | null;
   if (target?.closest("input, textarea, select, [contenteditable]")) return;
@@ -1804,20 +1836,68 @@ if (fixLink) {
 let cameraX = 0;
 let cameraY = 0;
 let zoom = 1.0;
-let worldWidth = 0;
-let worldHeight = 0;
 let cameraInitialized = false;
 
+// The rectangle that holds every component on the table, as this screen
+// shows it: boards, tokens and cards, counters, characters, dice, bags and the
+// piles of the decks. A flipped group turns around its own center, so its
+// boards cover the same rectangle; the components on it are mirrored. Null
+// when the table is empty.
+function tableBounds(): { minX: number; minY: number; maxX: number; maxY: number } | null {
+  let minX = Infinity;
+  let minY = Infinity;
+  let maxX = -Infinity;
+  let maxY = -Infinity;
+  const include = (x: number, y: number, width: number, height: number): void => {
+    minX = Math.min(minX, x);
+    minY = Math.min(minY, y);
+    maxX = Math.max(maxX, x + width);
+    maxY = Math.max(maxY, y + height);
+  };
+  const includeShown = (x: number, y: number, width: number, height: number): void => {
+    const [dx, dy] = displayTopLeft(x, y, width, height);
+    include(dx, dy, width, height);
+  };
+
+  for (const board of boards) {
+    const { width, height } = boardDims(board);
+    include(board.x, board.y, width, height);
+  }
+  for (const item of [...counters, ...counterBoxes, ...mwCharacters, ...secretChoices.map(secretChoiceBounds), ...dices, ...bags]) {
+    includeShown(item.x, item.y, item.width, item.height);
+  }
+  for (const deck of decks) {
+    for (const pile of deck.piles) {
+      const footprint = pileFootprint(deck, pile);
+      includeShown(footprint.x, footprint.y, footprint.width, footprint.height);
+    }
+  }
+
+  if (minX > maxX || minY > maxY) return null;
+  return { minX, minY, maxX, maxY };
+}
+
+// At the launch or the resumption of a game, the view is centered on the
+// rectangle that holds every component, with the zoom that shows as much of
+// it as possible. A table too large for the screen is shown at the minimum
+// zoom, still centered.
 function initializeCamera(): void {
   if (cameraInitialized) return;
-  if (boards.length === 0) return;
+  if (!componentsLoaded) return;
   if (!allBoardsLoaded(boards)) return;
 
-  worldWidth = Math.max(...boards.map((b) => b.x + boardDims(b).width));
-  worldHeight = Math.max(...boards.map((b) => b.y + boardDims(b).height));
+  const bounds = tableBounds();
+  if (bounds === null) return;
 
-  zoom = Math.min(canvas.width / worldWidth, canvas.height / worldHeight) * 0.98;
+  const width = Math.max(1, bounds.maxX - bounds.minX);
+  const height = Math.max(1, bounds.maxY - bounds.minY);
+  zoom = Math.min(canvas.width / width, canvas.height / height) * 0.98;
   zoom = Math.max(MIN_ZOOM, Math.min(MAX_ZOOM, zoom));
+
+  const centerX = (bounds.minX + bounds.maxX) / 2;
+  const centerY = (bounds.minY + bounds.maxY) / 2;
+  cameraX = centerX - canvas.width / (2 * zoom);
+  cameraY = centerY - canvas.height / (2 * zoom);
 
   cameraInitialized = true;
 }
@@ -2783,11 +2863,11 @@ function applyCounterValue(message: CounterValueEvent): void {
 // nationality mark it or turn it over, once the game is on.
 // Returns true when the action must not be sent; the player is told why.
 function characterRefused(character: MwCharacter): boolean {
-  if (character.nationality !== null && character.nationality !== myNationality) {
+  if (!nationalityAllows(character.nationality, myNationality)) {
     showInfoMessage(
       showComponentId
-        ? `${character.name}  réservé à ${character.nationality}`
-        : `Carte réservée à ${character.nationality}`,
+        ? `${character.name}  réservé à ${nationalityLabel(character.nationality)}`
+        : `Carte réservée à ${nationalityLabel(character.nationality)}`,
     );
     return true;
   }
@@ -2817,6 +2897,106 @@ function applyMark(message: MarkEvent): void {
   const column = mwCharactersById.get(message.component_id)?.columns[message.column];
   if (!column || message.index < 0 || message.index >= column.boxes) return;
   column.marks[message.index] = message.value;
+}
+
+// Whether this screen chooses the value of a secret_choice: a player of its
+// nationality, any player when it has none. The others never get the value
+// before it is revealed.
+function choosesSecret(secret: SecretChoice): boolean {
+  return !isWatcher && nationalityAllows(secret.nationality, myNationality);
+}
+
+// Mirrors the server rules of a secret_choice; the server decides anyway.
+// Returns true when nothing must be sent; the player is told why.
+function secretChoiceRefused(secret: SecretChoice): boolean {
+  if (!choosesSecret(secret)) {
+    showInfoMessage(
+      secret.nationality === null ? "Réservé aux joueurs" : `Réservé à ${nationalityLabel(secret.nationality)}`,
+    );
+    return true;
+  }
+  if (!isStarted) {
+    warnGameNotStarted();
+    return true;
+  }
+  if (missingPlayers.length > 0) {
+    warnPlayersMissing();
+    return true;
+  }
+  return false;
+}
+
+function sendSecretChoice(message: Record<string, string>): void {
+  const socket = getSocket();
+  if (!socket) return;
+  socket.send(message);
+  console.log("[WS] Envoyé :", JSON.stringify(message));
+}
+
+// The menu of the values, opened under the tile by a click of a player who
+// chooses. It is closed by a choice, Escape, or any other press.
+let secretChoiceMenu: HTMLDivElement | null = null;
+
+function closeSecretChoiceMenu(): void {
+  secretChoiceMenu?.remove();
+  secretChoiceMenu = null;
+}
+
+function openSecretChoiceMenu(secret: SecretChoice): void {
+  closeSecretChoiceMenu();
+  const menu = document.createElement("div");
+  menu.className = "secret-choice-menu";
+  for (const value of secret.choices) {
+    const item = document.createElement("button");
+    item.type = "button";
+    item.textContent = value;
+    if (value === secret.choice) item.classList.add("chosen");
+    item.addEventListener("mousedown", (event) => event.stopPropagation());
+    item.addEventListener("click", () => {
+      closeSecretChoiceMenu();
+      if (value !== secret.choice) {
+        sendSecretChoice({ action: "choose", component_id: secret.name, choice: value });
+      }
+    });
+    menu.appendChild(item);
+  }
+  // just under the tile, where the screen shows it
+  const [dx, dy] = displayTopLeft(secret.x, secret.y, secret.width, secret.height);
+  const [sx, sy] = worldToScreen(dx, dy + secret.height);
+  const canvasBox = canvas.getBoundingClientRect();
+  menu.style.left = `${canvasBox.left + sx}px`;
+  menu.style.top = `${canvasBox.top + sy + 4}px`;
+  document.body.appendChild(menu);
+  secretChoiceMenu = menu;
+}
+
+// a press elsewhere in the page closes the menu too; the canvas closes it itself,
+// before a click on a tile may open it again
+document.addEventListener("mousedown", (event) => {
+  const target = event.target as Node | null;
+  if (target === canvas || (secretChoiceMenu !== null && target !== null && secretChoiceMenu.contains(target))) return;
+  closeSecretChoiceMenu();
+});
+
+// A click on the tile opens the menu of the values while they may change; a
+// click on the icon under it validates the value, then reveals it.
+function requestSecretChoice(secret: SecretChoice, target: SecretChoiceTarget): void {
+  if (secretChoiceRefused(secret)) return;
+  if (target === "tile") {
+    if (canChoose(secret)) openSecretChoiceMenu(secret);
+    return;
+  }
+  if (pendingAction(secret) !== target) return;
+  sendSecretChoice({
+    action: target === "validate" ? "validate_choice" : "reveal_choice",
+    component_id: secret.name,
+  });
+}
+
+function applySecretChoice(message: SecretChoiceEvent): void {
+  const secret = secretChoicesById.get(message.component_id);
+  if (!secret || !message.component_json) return;
+  updateSecretChoice(secret, message.component_json);
 }
 
 // The server described a character again: a card went under it or left it.
@@ -2974,7 +3154,7 @@ function applyFlip(message: FlipEvent): void {
 // A token that belongs to a nationality is only taken by a player of that
 // nationality. The server enforces it: the page only spares a doomed request.
 function canAcquire(counter: Counter): boolean {
-  return counter.nationality === null || counter.nationality === myNationality;
+  return nationalityAllows(counter.nationality, myNationality);
 }
 
 // Mirrors refuse_modification on the server: the rules that forbid taking a
@@ -2988,8 +3168,8 @@ function modificationRefused(counter: Counter): boolean {
     // the refusal is always said; the name of the token only when the game shows it
     showInfoMessage(
       showComponentId
-        ? `${counter.name}  réservé à ${counter.nationality}`
-        : `Pion réservé à ${counter.nationality}`,
+        ? `${counter.name}  réservé à ${nationalityLabel(counter.nationality)}`
+        : `Pion réservé à ${nationalityLabel(counter.nationality)}`,
     );
     return true;
   }
@@ -3121,6 +3301,8 @@ function dropHand(toHand = false, toPlayer: string | null = null, toGenerator = 
 function onMouseDown(event: MouseEvent): void {
   const sx = event.offsetX;
   const sy = event.offsetY;
+  // any press on the table closes the menu of a secret_choice
+  closeSecretChoiceMenu();
 
   // the right button only moves the camera, whatever lies under the pointer,
   // and even with counters in hand: they follow the pointer again afterwards
@@ -3208,6 +3390,16 @@ function onMouseDown(event: MouseEvent): void {
       }
     }
 
+    // click on a secret_choice: its tile opens the menu of the values, the
+    // icon under it validates or reveals. Other screens only absorb the click.
+    if (hand.length === 0) {
+      const hit = hitSecretChoice(secretChoices, lx, ly, choosesSecret);
+      if (hit !== null) {
+        requestSecretChoice(hit.secret, hit.target);
+        return;
+      }
+    }
+
     // click on a box of an mw_character: it is marked. Like the + and - of a
     // counter, the boxes come before a token lying over them.
     if (hand.length === 0) {
@@ -3250,6 +3442,7 @@ function onMouseDown(event: MouseEvent): void {
       if (hand.length === 0) {
         const zone = hit.rotationZoneAt(lx, ly);
         if (zone !== null) {
+          lastRotationPressAt = performance.now();
           requestRotate(hit, zone);
           return;
         }
@@ -3536,8 +3729,7 @@ function revealsFront(counter: Counter): boolean {
   return (
     !isWatcher &&
     counter.side === "back" &&
-    counter.nationality !== null &&
-    counter.nationality === myNationality &&
+    nationalityIncludes(counter.nationality, myNationality) &&
     counter.frontImage.complete
   );
 }
@@ -3545,7 +3737,7 @@ function revealsFront(counter: Counter): boolean {
 // A counter with block_sight hides what lies under it from the watchers and
 // from the players of another nationality.
 function blocksSightOf(counter: Counter): boolean {
-  return counter.blockSight && (isWatcher || counter.nationality !== myNationality);
+  return counter.blockSight && (isWatcher || !nationalityIncludes(counter.nationality, myNationality));
 }
 
 /**
@@ -3559,7 +3751,7 @@ function sightBlockers(stack: Counter[]): (Counter | null)[] {
   let blocker: Counter | null = null;
   for (let index = stack.length - 1; index >= 0; index--) {
     const counter = stack[index];
-    const own = !isWatcher && counter.nationality !== null && counter.nationality === myNationality;
+    const own = !isWatcher && nationalityIncludes(counter.nationality, myNationality);
     if (blocker !== null && !own) masks[index] = blocker;
     if (blocker === null && blocksSightOf(counter)) blocker = counter;
   }
@@ -3837,6 +4029,13 @@ function trackPointerForEdgeScroll(clientX: number, clientY: number): void {
   edgeInside = inside;
 }
 
+// When the last press on a rotation zone happened. Two quick presses on the
+// rotation icons make the browser send a dblclick: it must not turn the token
+// over. The window is wider than the double-click delay of the system, so a
+// double click that starts or ends on a rotation icon is always ignored.
+const ROTATION_DOUBLE_CLICK_GUARD_MS = 1000;
+let lastRotationPressAt = -Infinity;
+
 /**
  * Le double-clic retourne le pion sous le pointeur. Le simple-clic, lui, le
  * prend en main : les deux gestes se cumulent, comme dans le Vietnam d'avant,
@@ -3846,6 +4045,8 @@ function onDoubleClick(event: MouseEvent): void {
   // un spectateur regarde : il ne retourne rien. Le serveur refuse de son côté,
   // le double-clic n'a donc rien à lui demander.
   if (isWatcher) return;
+  // one of its two clicks turned a token: it is not a double click
+  if (performance.now() - lastRotationPressAt < ROTATION_DOUBLE_CLICK_GUARD_MS) return;
 
   const [wx, wy] = screenToWorld(event.offsetX, event.offsetY);
   const [lx, ly] = flipPoint(wx, wy);
@@ -3866,6 +4067,8 @@ function onDoubleClick(event: MouseEvent): void {
 
 function onMouseWheel(event: WheelEvent): void {
   event.preventDefault();
+  // the menu of a secret_choice is placed for the current view
+  closeSecretChoiceMenu();
 
   // while following a view, the zoom keeps its center in the middle
   const mx = followedPlayer === null ? event.offsetX : canvas.width / 2;
@@ -3921,6 +4124,12 @@ function draw(): void {
   for (const character of mwCharacters) {
     drawAtDisplay(ctx, character.x, character.y, character.width, character.height, () => {
       drawMwCharacter(ctx, character);
+    });
+  }
+
+  for (const secret of secretChoices) {
+    drawAtDisplay(ctx, secret.x, secret.y, secret.width, secret.height, () => {
+      drawSecretChoice(ctx, secret, choosesSecret(secret));
     });
   }
 
@@ -4127,6 +4336,8 @@ function handleServerMessage(raw: unknown): void {
       applyCounterValue(data as unknown as CounterValueEvent);
     } else if (data.event === "mark") {
       applyMark(data as unknown as MarkEvent);
+    } else if (data.event === "secret_choice") {
+      applySecretChoice(data as unknown as SecretChoiceEvent);
     } else if (data.event === "fix_positions") {
       applyFixPositions(data as unknown as FixPositionsEvent);
     } else if (data.event === "setup") {
@@ -4135,12 +4346,15 @@ function handleServerMessage(raw: unknown): void {
       applySessionStatus(data as unknown as SessionStatusEvent);
     } else if (data.event === "session_closed") {
       applySessionClosed();
+      if ((data as unknown as SessionClosedEvent).by_admin) showAdminPopup(CLOSED_BY_ADMIN_MESSAGE);
       // l'owner qui vient de cliquer part sur le lobby, les autres restent
       // sur la partie close
       if (pendingClose) {
         pendingClose = false;
         window.location.href = leaveUrl;
       }
+    } else if (data.event === "session_deleted") {
+      applySessionDeleted();
     } else if (data.event === "error") {
       reportServerError(data as unknown as ServerErrorEvent);
     } else if (data.event === "session_created" || data.event === "session_joined") {
@@ -4420,10 +4634,9 @@ function maybeRequestSetup(): void {
 }
 
 // Le setup a ete applique : chaque ecran replace ses composants, quel que soit
-// le genre du composant. Un plateau deplace change le monde a cadrer, donc la
-// camera doit le revoir.
+// le genre du composant. The table to frame has changed with them, so the
+// camera frames it again.
 function applySetup(message: SetupEvent): void {
-  let boardMoved = false;
 
   for (const item of message.components ?? []) {
     // a deck a randomizer took cards from: its piles are read again
@@ -4445,7 +4658,6 @@ function applySetup(message: SetupEvent): void {
     if (board !== undefined) {
       board.x = state.x;
       board.y = state.y;
-      boardMoved = true;
       continue;
     }
 
@@ -4506,7 +4718,7 @@ function applySetup(message: SetupEvent): void {
     }
   }
 
-  if (boardMoved) cameraInitialized = false;
+  cameraInitialized = false;
 
   // le serveur ne renverra plus de setup : la partie est installee
   pendingSetup = [];
@@ -4613,6 +4825,19 @@ function applySessionClosed(): void {
   clearPending();
   updateLeaveLinks();
   updateSessionInfo();
+}
+
+// The administration of OBG deleted the game: the server no longer knows it,
+// everybody goes back to the lobby once told.
+function applySessionDeleted(): void {
+  // the refusals of the actions still in flight lead nowhere else
+  leavingDeadSession = true;
+  isClosed = true;
+  voice.leave();
+  updateVoiceControls();
+  clearPending();
+  clearSession();
+  showAdminPopup(DELETED_BY_ADMIN_MESSAGE, goToLobby);
 }
 
 // -------------------------------------------------
@@ -4766,6 +4991,7 @@ function componentsBounds(): WorldRect | null {
   }
   for (const box of counterBoxes) add(box.x, box.y, box.width, box.height);
   for (const character of mwCharacters) add(character.x, character.y, character.width, character.height);
+  for (const secret of secretChoices) add(secret.x, secret.y, secret.width, secret.height);
   for (const bag of bags) add(bag.x, bag.y, bag.width, bag.height);
   for (const dice of dices) add(dice.x, dice.y, dice.width, dice.height);
   for (const counter of counters) {
@@ -4842,6 +5068,11 @@ function drawComponents(context: CanvasRenderingContext2D): void {
   for (const character of mwCharacters) {
     drawAtDisplay(context, character.x, character.y, character.width, character.height, () => {
       drawMwCharacter(context, character);
+    });
+  }
+  for (const secret of secretChoices) {
+    drawAtDisplay(context, secret.x, secret.y, secret.width, secret.height, () => {
+      drawSecretChoice(context, secret, choosesSecret(secret));
     });
   }
   for (const bag of bags) {
