@@ -60,6 +60,7 @@ import { VoiceChat } from "./voice";
 import handCardsIcon from "../../Common/resources/hand_cards.svg?raw";
 import eyeIcon from "../../Common/resources/eye.svg?raw";
 import { lobbyReturnUrl, originGameName } from "./navigation";
+import { bindShareLink } from "./shareLink";
 import { acquireGameLock, GAME_OPEN_ELSEWHERE_MESSAGE } from "./gameLock";
 import { invalidComponentMessage, serverFullMessage } from "./serverErrors";
 import { adoptAdminSession, clearSession, loadPlayerIdentity, loadSession, storeSession } from "./session";
@@ -1076,6 +1077,11 @@ function warnPlayersMissing(): void {
 
 const sessionInfo = document.getElementById("session-info");
 
+// the lobby link of the session, to send to the other players: shown while the
+// session has a code and is not closed
+const shareLinkButton = document.getElementById("share-link") as HTMLButtonElement | null;
+if (shareLinkButton) bindShareLink(shareLinkButton, () => currentSession?.code);
+
 // Le bandeau affiche le jeu et le joueur plutôt que le nom du site : on sait
 // d'un coup d'œil où l'on est et sous quelle identité.
 const gameTitle = document.getElementById("game-title");
@@ -1095,6 +1101,7 @@ function updateGameTitle(): void {
 updateGameTitle();
 
 function updateSessionInfo(): void {
+  if (shareLinkButton) shareLinkButton.hidden = !currentSession?.code || isClosed;
   if (!sessionInfo) return;
   if (!currentSession?.key) {
     sessionInfo.textContent = "Aucune session active";

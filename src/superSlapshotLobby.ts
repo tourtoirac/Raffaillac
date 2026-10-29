@@ -17,7 +17,9 @@ import {
   watchersCheckbox,
 } from "./serviceModal";
 import { setServicePrivate } from "./prototype";
-import { emptyListMessage, matchesSearch } from "./sessionList";
+import { setServiceDocuments } from "./serviceDocuments";
+import type { SessionDocument } from "./types";
+import { emptyListMessage, highlightedFirst, isHighlighted, matchesSearch } from "./sessionList";
 import type { Pager } from "./sessionList";
 
 // not "super_slapshot": the lobby compares game names whatever their case, and the
@@ -95,13 +97,15 @@ export function startSuperSlapshotLobby(onChange: () => void): void {
     url.protocol = url.protocol === "https:" ? "wss:" : "ws:";
     const ws = new WebSocket(url);
     ws.onmessage = (e) => {
-      const data = JSON.parse(e.data as string) as { event: string; games?: SuperSlapshotGame[]; active?: boolean; private?: boolean };
+      const data = JSON.parse(e.data as string) as { event: string; games?: SuperSlapshotGame[]; active?: boolean; private?: boolean; documents?: SessionDocument[] };
       if (data.event !== "games") return;
       games = data.games ?? [];
       // absent from an older Hautefort: the module is on
       active = data.active !== false;
       // in prototyping: the lobby locks the tab until its key is given
       setServicePrivate(SUPER_SLAPSHOT, data.private === true);
+      // its rules and charts, shown above its games
+      setServiceDocuments(SUPER_SLAPSHOT, data.documents);
       connected = true;
       delay = 2000;
       rerender();
@@ -182,7 +186,7 @@ export function renderSuperSlapshotTab(
   pager: Pager,
   lockWhenFull: (button: HTMLButtonElement) => HTMLButtonElement,
 ): void {
-  const shown = games.filter((game) => superSlapshotMatches(game, query));
+  const shown = highlightedFirst(games.filter((game) => superSlapshotMatches(game, query)), (game) => game.code);
   if (shown.length > 0) {
     const table = document.createElement("table");
     table.innerHTML = `
@@ -198,6 +202,7 @@ export function renderSuperSlapshotTab(
     const tbody = table.querySelector("tbody") as HTMLTableSectionElement;
     for (const game of pager.slice(SUPER_SLAPSHOT_TAB, shown)) {
       const row = document.createElement("tr");
+      if (isHighlighted(game.code)) row.className = "highlighted";
       const codeCell = document.createElement("td");
       codeCell.textContent = game.code;
       codeCell.title = game.status === "waiting" ? "En attente des managers" : `Tour ${game.turn}`;

@@ -3,6 +3,7 @@ import {
   AIR_FORCE_TAB,
   HAUTEFORT as AIR_FORCE_SERVICE,
   airForceAvailable,
+  airForceGames,
   renderAirForceTab,
   startAirForceLobby,
 } from "./airForceLobby";
@@ -11,6 +12,7 @@ import {
   JUDGE_DREDD_LABEL,
   JUDGE_DREDD_TAB,
   judgeDreddAvailable,
+  judgeDreddGames,
   renderJudgeDreddTab,
   startJudgeDreddLobby,
 } from "./judgeDreddLobby";
@@ -19,6 +21,7 @@ import {
   MONSTER_DERBY_LABEL,
   MONSTER_DERBY_TAB,
   monsterDerbyAvailable,
+  monsterDerbyGames,
   renderMonsterDerbyTab,
   startMonsterDerbyLobby,
 } from "./monsterDerbyLobby";
@@ -29,10 +32,12 @@ import {
   renderSuperSlapshotTab,
   startSuperSlapshotLobby,
   superSlapshotAvailable,
+  superSlapshotGames,
 } from "./superSlapshotLobby";
-import { ZARGOS, ZARGOS_LABEL, ZARGOS_TAB, renderZargosTab, startZargosLobby, zargosAvailable } from "./zargosLobby";
+import { ZARGOS, ZARGOS_LABEL, ZARGOS_TAB, renderZargosTab, startZargosLobby, zargosAvailable, zargosGames } from "./zargosLobby";
 import { GAME_OPEN_ELSEWHERE_MESSAGE, isGameOpenElsewhere } from "./gameLock";
 import { gameEntryUrl } from "./navigation";
+import { serviceDocuments } from "./serviceDocuments";
 import {
   LOCKED_MARK,
   WRONG_KEY_MESSAGE,
@@ -57,7 +62,7 @@ import type {
   SessionDocument,
 } from "./types";
 import { invalidComponentMessage, serverFullMessage } from "./serverErrors";
-import { Pager, emptyListMessage, matchesSearch } from "./sessionList";
+import { Pager, emptyListMessage, highlightedCode, highlightedFirst, isHighlighted, matchesSearch } from "./sessionList";
 import { getSocket } from "./ws/wsClient";
 import type { SocketStateMessage } from "./ws/wsClient";
 
@@ -121,6 +126,7 @@ searchInput.addEventListener("input", () => {
 let selectedGame = new URLSearchParams(window.location.search).get("game");
 
 function selectGame(gameName: string): void {
+  followCode = false;
   selectedGame = gameName;
   const url = new URL(window.location.href);
   url.searchParams.set("game", gameName);
@@ -128,7 +134,7 @@ function selectGame(gameName: string): void {
 }
 
 function selectedGameIndex(gameNames: string[]): number {
-  const wanted = selectedGame;
+  const wanted = codeGameName() ?? selectedGame;
   if (wanted) {
     const index = gameNames.findIndex(
       (name) => name.toLowerCase() === wanted.toLowerCase(),
@@ -228,6 +234,8 @@ function shownGameTypes(): GameType[] {
 }
 
 function activeGameType(): GameType {
+  const codeGame = codeGameName();
+  if (codeGame) return gameTypeOf(codeGame);
   if (selectedType && shownGameTypes().includes(selectedType)) return selectedType;
   const offered = offeredGameNames();
   const wanted = selectedGame?.toLowerCase();
@@ -237,6 +245,7 @@ function activeGameType(): GameType {
 }
 
 function selectGameType(type: GameType): void {
+  followCode = false;
   selectedType = type;
   const url = new URL(window.location.href);
   url.searchParams.set("type", type);
@@ -249,6 +258,26 @@ function selectGameType(type: GameType): void {
 function visibleGameNames(): string[] {
   const type = activeGameType();
   return offeredGameNames().filter((name) => gameTypeOf(name) === type);
+}
+
+// The game of the code given in the address (?code=), among the games offered:
+// the lobby opens its type tab and its tab, until the player picks another one.
+let followCode = highlightedCode !== null;
+
+const REFEREED_LISTS: Record<string, () => readonly { code: string }[]> = {
+  [AIR_FORCE_TAB]: airForceGames,
+  [JUDGE_DREDD_TAB]: judgeDreddGames,
+  [MONSTER_DERBY_TAB]: monsterDerbyGames,
+  [SUPER_SLAPSHOT_TAB]: superSlapshotGames,
+  [ZARGOS_TAB]: zargosGames,
+};
+
+function codeGameName(): string | null {
+  if (!followCode) return null;
+  return offeredGameNames().find((name) => {
+    const list = REFEREED_LISTS[name]?.() ?? sessionsData[name] ?? [];
+    return list.some((game) => isHighlighted(game.code));
+  }) ?? null;
 }
 
 // nom du jeu réellement affiché : selectedGame peut être absent de la liste
@@ -865,8 +894,11 @@ function renderAll(): void {
 
   gameNames.forEach((name, index) => {
     const game = gameInfo[name];
-    const sessions = (sessionsData[name] || []).filter((session) =>
-      matchesSearch(searchQuery, session.code, (session.players ?? []).map((p) => p.nickname)),
+    const sessions = highlightedFirst(
+      (sessionsData[name] || []).filter((session) =>
+        matchesSearch(searchQuery, session.code, (session.players ?? []).map((p) => p.nickname)),
+      ),
+      (session) => session.code,
     );
     const variants = game?.variant ?? {};
     const variantKeys = Object.keys(variants);
@@ -898,6 +930,9 @@ function renderAll(): void {
         : name === JUDGE_DREDD_TAB ? renderJudgeDreddTab
         : name === MONSTER_DERBY_TAB ? renderMonsterDerbyTab
         : name === SUPER_SLAPSHOT_TAB ? renderSuperSlapshotTab : renderZargosTab;
+      // its documents, set by the administration of OBG, as those of a Chabanas game
+      const refereedDocuments = renderDocumentsSelect(serviceDocuments(REFEREED_SERVICES[name]));
+      if (refereedDocuments) container.appendChild(refereedDocuments);
       renderTab(container, searchQuery, pager, lockWhenFull);
       tablesContainer.appendChild(container);
       return;
@@ -923,6 +958,7 @@ function renderAll(): void {
       const tbody = table.querySelector("tbody") as HTMLTableSectionElement;
       for (const session of pager.slice(name, sessions)) {
         const row = document.createElement("tr");
+        if (isHighlighted(session.code)) row.className = "highlighted";
         // the game or the variant the session plays
         const gameCell = document.createElement("td");
         gameCell.textContent = session.display_name || game?.display_name || name;

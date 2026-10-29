@@ -19,7 +19,9 @@ import {
   watchersCheckbox,
 } from "./serviceModal";
 import { setServicePrivate } from "./prototype";
-import { emptyListMessage, matchesSearch } from "./sessionList";
+import { setServiceDocuments } from "./serviceDocuments";
+import type { SessionDocument } from "./types";
+import { emptyListMessage, highlightedFirst, isHighlighted, matchesSearch } from "./sessionList";
 import type { Pager } from "./sessionList";
 
 // not "monster_derby": the lobby compares game names whatever their case, and a
@@ -99,13 +101,15 @@ export function startMonsterDerbyLobby(onChange: () => void): void {
     url.protocol = url.protocol === "https:" ? "wss:" : "ws:";
     const ws = new WebSocket(url);
     ws.onmessage = (e) => {
-      const data = JSON.parse(e.data as string) as { event: string; games?: MonsterDerbyGame[]; active?: boolean; private?: boolean };
+      const data = JSON.parse(e.data as string) as { event: string; games?: MonsterDerbyGame[]; active?: boolean; private?: boolean; documents?: SessionDocument[] };
       if (data.event !== "games") return;
       games = data.games ?? [];
       // absent from an older Hautefort: the module is on
       active = data.active !== false;
       // in prototyping: the lobby locks the tab until its key is given
       setServicePrivate(MONSTER_DERBY, data.private === true);
+      // its rules and charts, shown above its games
+      setServiceDocuments(MONSTER_DERBY, data.documents);
       connected = true;
       delay = 2000;
       rerender();
@@ -196,7 +200,7 @@ export function renderMonsterDerbyTab(
   pager: Pager,
   lockWhenFull: (button: HTMLButtonElement) => HTMLButtonElement,
 ): void {
-  const shown = games.filter((game) => monsterDerbyMatches(game, query));
+  const shown = highlightedFirst(games.filter((game) => monsterDerbyMatches(game, query)), (game) => game.code);
   if (shown.length > 0) {
     const table = document.createElement("table");
     table.innerHTML = `
@@ -212,6 +216,7 @@ export function renderMonsterDerbyTab(
     const tbody = table.querySelector("tbody") as HTMLTableSectionElement;
     for (const game of pager.slice(MONSTER_DERBY_TAB, shown)) {
       const row = document.createElement("tr");
+      if (isHighlighted(game.code)) row.className = "highlighted";
       const codeCell = document.createElement("td");
       codeCell.textContent = game.code;
       const sets: Record<string, string> = Object.fromEntries((catalog?.sets ?? []).map((x) => [x.key, x.name]));

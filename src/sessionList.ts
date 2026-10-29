@@ -12,6 +12,21 @@ export function matchesSearch(query: string, code: string | undefined, nicknames
   return nicknames.some((nickname) => nickname.toLowerCase().includes(wanted));
 }
 
+// The game named in the address of the lobby (?code=AB12CD34): its list is opened,
+// the game comes first and its row is highlighted.
+export const highlightedCode: string | null =
+  new URLSearchParams(window.location.search).get("code")?.trim().toUpperCase() || null;
+
+export function isHighlighted(code: string | null | undefined): boolean {
+  return highlightedCode !== null && (code ?? "").toUpperCase() === highlightedCode;
+}
+
+// the list with the highlighted game first, the others in their order
+export function highlightedFirst<T>(items: T[], code: (item: T) => string | null | undefined): T[] {
+  if (highlightedCode === null) return items;
+  return [...items.filter((item) => isHighlighted(code(item))), ...items.filter((item) => !isHighlighted(code(item)))];
+}
+
 // The page shown of each list, by list key (a game name). A list keeps its page
 // across the refreshes pushed by the server; a new search starts every list
 // over at its first page.

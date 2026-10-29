@@ -150,8 +150,10 @@ Chabanas, jamais ceux des variantes) : `renderDocumentsSelect` de `lobby.ts`
 place au-dessus des sessions d'un jeu de table un menu `.documents-select`
 semblable à celui de la page de jeu (« Consulter un document », puis un nom par
 document ; un choix l'ouvre dans un nouvel onglet et ramène le menu sur la
-première entrée). Sans document, pas de menu. Les onglets verrouillés et ceux
-des jeux arbitrés n'en ont pas.
+première entrée). Sans document, pas de menu. Les onglets verrouillés n'en ont
+pas. Les jeux arbitrés ont le même menu, avec les documents de leur module
+Hautefort : champ `documents` de l'événement `games` de leur `ws/lobby`, gardé
+par `setServiceDocuments` (`serviceDocuments.ts`) et lu par `lobby.ts`.
 
 ### Jeux en prototypage
 
@@ -331,6 +333,19 @@ OBG (`REFEREED_GAMES` : Air Force, Judge Dredd). Les onglets de jeux
 (`#tabs-container`) ne listent que les jeux du type affiché
 (`visibleGameNames`). L'onglet courant est gardé dans `?type=` ; sans ce
 paramètre, c'est le type du jeu de `?game=` qui est affiché.
+
+**Lien vers une partie** : `?code=<code>` (casse indifférente) ouvre l'onglet de
+type et l'onglet du jeu qui a une partie de ce code, parties de la table OBG et
+des jeux arbitrés comprises (`codeGameName` de `lobby.ts`, qui passe avant
+`?type=` et `?game=`), jusqu'à ce que le joueur clique un autre onglet
+(`followCode`). Dans la liste, la partie vient en tête et sa ligne est colorée
+(`tr.highlighted`) : `highlightedCode`, `isHighlighted` et `highlightedFirst` de
+`sessionList.ts`, appelés par `lobby.ts` et par chaque `*Lobby.ts` des jeux
+arbitrés. Un code inconnu (partie finie, archivée) ne change rien. Ce lien se
+copie depuis la page de partie : bouton « Copier le lien de la partie » du bandeau
+de `game.html` (`src/shareLink.ts`, montré tant que la session a un code et n'est
+pas close), et le même dans les pages des jeux arbitrés
+(`Hautefort/front/common/shareLink.ts`).
 
 Jeux arbitrés : **Air Force** (`airForceLobby.ts`, clé `air_force`, service
 module `airforce` de `OBG/Hautefort` sous `hautefort/airforce/`) et **Judge
