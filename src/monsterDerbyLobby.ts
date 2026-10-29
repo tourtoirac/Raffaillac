@@ -18,6 +18,7 @@ import {
   textField,
   watchersCheckbox,
 } from "./serviceModal";
+import { setServicePrivate } from "./prototype";
 import { emptyListMessage, matchesSearch } from "./sessionList";
 import type { Pager } from "./sessionList";
 
@@ -27,7 +28,7 @@ export const MONSTER_DERBY_TAB = "monster_derby_refereed";
 export const MONSTER_DERBY_LABEL = "Monster Derby";
 
 // the Monster Derby module of Hautefort
-const MONSTER_DERBY = serviceUrl("hautefort/monsterderby/");
+export const MONSTER_DERBY = serviceUrl("hautefort/monsterderby/");
 // seat tokens, read back by the Monster Derby game page (same origin, same tab)
 const SEATS_KEY = "monsterderby_seats";
 
@@ -98,11 +99,13 @@ export function startMonsterDerbyLobby(onChange: () => void): void {
     url.protocol = url.protocol === "https:" ? "wss:" : "ws:";
     const ws = new WebSocket(url);
     ws.onmessage = (e) => {
-      const data = JSON.parse(e.data as string) as { event: string; games?: MonsterDerbyGame[]; active?: boolean };
+      const data = JSON.parse(e.data as string) as { event: string; games?: MonsterDerbyGame[]; active?: boolean; private?: boolean };
       if (data.event !== "games") return;
       games = data.games ?? [];
       // absent from an older Hautefort: the module is on
       active = data.active !== false;
+      // in prototyping: the lobby locks the tab until its key is given
+      setServicePrivate(MONSTER_DERBY, data.private === true);
       connected = true;
       delay = 2000;
       rerender();

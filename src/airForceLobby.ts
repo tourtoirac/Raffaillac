@@ -16,6 +16,7 @@ import {
   textField,
   watchersCheckbox,
 } from "./serviceModal";
+import { setServicePrivate } from "./prototype";
 import { emptyListMessage, matchesSearch } from "./sessionList";
 import type { Pager } from "./sessionList";
 
@@ -24,7 +25,7 @@ export const AIR_FORCE_LABEL = "Air Force";
 
 // the Air Force module of Hautefort, next to the lobby whatever the public path
 // (/ locally, /obg/ in production)
-const HAUTEFORT = serviceUrl("hautefort/airforce/");
+export const HAUTEFORT = serviceUrl("hautefort/airforce/");
 // seat tokens, read back by the Hautefort game page (same origin, same tab)
 const SEATS_KEY = "hautefort_seats";
 
@@ -110,11 +111,13 @@ export function startAirForceLobby(onChange: () => void): void {
     url.protocol = url.protocol === "https:" ? "wss:" : "ws:";
     const ws = new WebSocket(url);
     ws.onmessage = (e) => {
-      const data = JSON.parse(e.data as string) as { event: string; games?: AirForceGame[]; active?: boolean };
+      const data = JSON.parse(e.data as string) as { event: string; games?: AirForceGame[]; active?: boolean; private?: boolean };
       if (data.event !== "games") return;
       games = data.games ?? [];
       // absent from an older Hautefort: the module is on
       active = data.active !== false;
+      // in prototyping: the lobby locks the tab until its key is given
+      setServicePrivate(HAUTEFORT, data.private === true);
       connected = true;
       delay = 2000;
       rerender();

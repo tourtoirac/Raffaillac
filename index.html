@@ -71,6 +71,28 @@
       cursor: not-allowed;
     }
 
+    /* the tab of a game in prototyping, before its key is given */
+    .prototype-lock {
+      max-width: 480px;
+      color: #555;
+    }
+    .prototype-lock-row {
+      display: flex;
+      gap: 8px;
+    }
+    .prototype-lock-row input {
+      flex: 1;
+      min-width: 0;
+      padding: 8px;
+      border: 1px solid #ccc;
+      border-radius: 4px;
+    }
+    .prototype-lock-error {
+      margin-top: 6px;
+      color: #dc3545;
+      font-size: 0.9em;
+    }
+
     #status {
       padding: 10px;
       border: 1px solid #ccc;
@@ -175,6 +197,20 @@
 
     .table-container.active {
       display: block;
+    }
+
+    /* The documents of the game, above its sessions (src/lobby.ts). */
+    .documents-select {
+      display: block;
+      margin-bottom: 15px;
+      font: inherit;
+      font-size: 14px;
+      color: #007bff;
+      background: white;
+      border: 1px solid currentColor;
+      border-radius: 4px;
+      padding: 6px 10px;
+      cursor: pointer;
     }
 
     table {

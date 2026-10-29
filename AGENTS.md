@@ -143,6 +143,41 @@ serveur.
   exception : les onglets des jeux arbitrés, qui parlent à Hautefort (voir
   § Lobby).
 
+### Documents du jeu dans le lobby
+
+`GameInfo.documents` (liste `list_game`, champ `documents` du **jeu** dans
+Chabanas, jamais ceux des variantes) : `renderDocumentsSelect` de `lobby.ts`
+place au-dessus des sessions d'un jeu de table un menu `.documents-select`
+semblable à celui de la page de jeu (« Consulter un document », puis un nom par
+document ; un choix l'ouvre dans un nouvel onglet et ramène le menu sur la
+première entrée). Sans document, pas de menu. Les onglets verrouillés et ceux
+des jeux arbitrés n'en ont pas.
+
+### Jeux en prototypage
+
+`src/prototype.ts`. Un jeu de Chabanas (`GameInfo.private`) ou un module de
+Hautefort (`private` de l'événement `games` de son `ws/lobby`, relevé par
+`setServicePrivate` dans chaque `*Lobby.ts`) en prototypage est rangé sous
+l'onglet de type « Prototypes » (`GameType` `Prototype`, `isPrototype` dans
+`lobby.ts`), quel que soit son type (Wargame, Boardgame, arbitré), et
+n'apparaît plus avec les autres jeux ; cet onglet n'est montré que s'il y a un
+prototype (`shownGameTypes`). Une version publique et un prototype du même
+jeu (deux `Game` de noms différents) cohabitent ainsi, chacun sous son
+onglet. Son onglet de jeu est marqué 🔒 ; son contenu est remplacé par un champ de clé
+(`renderLockedTab`) tant que la clé n'a pas été acceptée. Vérification :
+`unlock_game` à Tourtoirac (jeu de table, réponse `game_unlocked`) ou
+`POST <module>/api/unlock` (jeu arbitré). La clé acceptée est gardée pour la
+visite seulement (`sessionStorage`, `obg_prototype_keys`, par nom de jeu ou
+par URL du module) et renvoyée à chaque création / adhésion : `prototype_key`
+dans les messages de Tourtoirac, en-tête `X-Hautefort-Prototype-Key` dans
+`postJson` (`serviceModal.ts`). Un refus `prototype_key_incorrect` oublie la
+clé et reverrouille l'onglet.
+
+Les ressources des prototypes (envoyées sur les pages `proto/` de Chabanas)
+sont dans `OBG/Prototypes`, monté en lecture seule et servi sous
+`/Prototypes/` par `nginx/default.conf`, avec `nosniff` et une CSP `sandbox` :
+un fichier envoyé par un développeur ne s'exécute jamais comme une page du site.
+
 ### Onglet Monster Derby
 
 `src/monsterDerbyLobby.ts` (modèle de `judgeDreddLobby.ts`) : onglet
@@ -166,7 +201,7 @@ table du jeu (`Super_Slapshot` dans Chabanas) a été supprimée le 26/10/2026. 
 `src/zargosLobby.ts` (modèle de `superSlapshotLobby.ts`) : onglet `zargos_refereed`
 parmi les « Arbitrés », module `hautefort/zargos/` (créé le 26/10/2026). Pas d'option à
 la création ; 2 à 6 joueurs, couleur donnée par le module. La version table du jeu
-(`Zargos` dans Chabanas) garde son onglet. Branché dans `lobby.ts` (`REFEREED_GAMES`)
+(`Zargos` dans Chabanas) a été supprimée le 27/10/2026. Branché dans `lobby.ts` (`REFEREED_GAMES`)
 et `activeGames.ts`.
 
 ### Administration d'OBG
@@ -525,7 +560,9 @@ moins de cartes que de joueurs : `requestDeckAction` n'envoie alors rien.
 L'événement `deal` passe par `applyDeal` : pile et mains relues, et les
 `cards` reçues (celles du lecteur seulement) rejoignent `myHand`.
 
-`Session.documents` (clé `documents` du `game_json`, des PDF) alimente le menu
+`Session.documents` (clé `documents` du `game_json` de la session, que
+Chabanas y met à sa création depuis le champ `documents` du jeu ou de la
+variante ; PDF ou page d'aide) alimente le menu
 déroulant `#documents-select`, en haut du panneau `#participants`, au-dessus
 de « Rejoindre l'audio » (spectateurs compris) : première
 entrée « Consulter », puis le nom de chaque document ; en choisir un l'ouvre

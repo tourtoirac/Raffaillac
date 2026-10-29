@@ -5,6 +5,8 @@
 // nickname, an optional personal key to take one's seat back, an optional
 // access key for the game.
 
+import { forgetPrototypeKey, prototypeHeaders } from "./prototype";
+
 /** a service published next to the lobby, whatever the public path (/ locally, /obg/ in production) */
 export function serviceUrl(path: string): URL {
   return new URL(path, new URL(import.meta.env.BASE_URL, window.location.href));
@@ -21,10 +23,13 @@ export interface SeatGrant {
 export async function postJson(base: URL, path: string, body: unknown): Promise<SeatGrant> {
   const response = await fetch(new URL(path, base), {
     method: "POST",
-    headers: { "Content-Type": "application/json" },
+    // a game in prototyping: the key given in the lobby, checked again by the service
+    headers: { "Content-Type": "application/json", ...prototypeHeaders(base) },
     body: JSON.stringify(body),
   });
-  const data = (await response.json()) as SeatGrant & { error?: { message: string } };
+  const data = (await response.json()) as SeatGrant & { error?: { code?: string; message: string } };
+  // the key kept no longer opens the game: its tab locks again
+  if (data.error?.code === "prototype_key_incorrect") forgetPrototypeKey(base.href);
   if (!response.ok) throw new Error(data.error?.message ?? `Erreur ${response.status}`);
   return data;
 }

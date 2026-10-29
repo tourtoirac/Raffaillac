@@ -1,11 +1,13 @@
 import {
   AIR_FORCE_LABEL,
   AIR_FORCE_TAB,
+  HAUTEFORT as AIR_FORCE_SERVICE,
   airForceAvailable,
   renderAirForceTab,
   startAirForceLobby,
 } from "./airForceLobby";
 import {
+  JUDGE_DREDD,
   JUDGE_DREDD_LABEL,
   JUDGE_DREDD_TAB,
   judgeDreddAvailable,
@@ -13,6 +15,7 @@ import {
   startJudgeDreddLobby,
 } from "./judgeDreddLobby";
 import {
+  MONSTER_DERBY,
   MONSTER_DERBY_LABEL,
   MONSTER_DERBY_TAB,
   monsterDerbyAvailable,
@@ -20,15 +23,27 @@ import {
   startMonsterDerbyLobby,
 } from "./monsterDerbyLobby";
 import {
+  SUPER_SLAPSHOT,
   SUPER_SLAPSHOT_LABEL,
   SUPER_SLAPSHOT_TAB,
   renderSuperSlapshotTab,
   startSuperSlapshotLobby,
   superSlapshotAvailable,
 } from "./superSlapshotLobby";
-import { ZARGOS_LABEL, ZARGOS_TAB, renderZargosTab, startZargosLobby, zargosAvailable } from "./zargosLobby";
+import { ZARGOS, ZARGOS_LABEL, ZARGOS_TAB, renderZargosTab, startZargosLobby, zargosAvailable } from "./zargosLobby";
 import { GAME_OPEN_ELSEWHERE_MESSAGE, isGameOpenElsewhere } from "./gameLock";
 import { gameEntryUrl } from "./navigation";
+import {
+  LOCKED_MARK,
+  WRONG_KEY_MESSAGE,
+  forgetPrototypeKey,
+  prototypeKey,
+  renderLockedTab,
+  serviceLocked,
+  servicePrivate,
+  storePrototypeKey,
+  unlockService,
+} from "./prototype";
 import { storePlayerIdentity, storeSession } from "./session";
 import type {
   ActiveSession,
@@ -39,6 +54,7 @@ import type {
   Session,
   SessionCreatedEvent,
   SessionsInfoEvent,
+  SessionDocument,
 } from "./types";
 import { invalidComponentMessage, serverFullMessage } from "./serverErrors";
 import { Pager, emptyListMessage, matchesSearch } from "./sessionList";
@@ -127,10 +143,26 @@ function selectedGameIndex(gameNames: string[]): number {
 // refereed games are not Chabanas games: their rules are applied by a service
 // of their own (Hautefort, with a module per game: Air Force, Judge Dredd),
 // not by the OBG table.
-const GAME_TYPES: GameType[] = ["Boardgame", "Wargame", "Refereed"];
+// The games in prototyping are listed apart, under a tab of their own shown only
+// when there is one: a public version and a prototype of the same game live side
+// by side, each under its tab.
+const GAME_TYPES: GameType[] = ["Boardgame", "Wargame", "Refereed", "Prototype"];
 const DEFAULT_GAME_TYPE: GameType = "Wargame";
-const TYPE_LABELS: Record<GameType, string> = { Boardgame: "Boardgame", Wargame: "Wargame", Refereed: "Arbitrés" };
+const TYPE_LABELS: Record<GameType, string> = {
+  Boardgame: "Boardgame",
+  Wargame: "Wargame",
+  Refereed: "Arbitrés",
+  Prototype: "Prototypes",
+};
 const REFEREED_GAMES = [AIR_FORCE_TAB, JUDGE_DREDD_TAB, MONSTER_DERBY_TAB, SUPER_SLAPSHOT_TAB, ZARGOS_TAB];
+// the Hautefort module of each refereed game: it checks the key of a prototype
+const REFEREED_SERVICES: Record<string, URL> = {
+  [AIR_FORCE_TAB]: AIR_FORCE_SERVICE,
+  [JUDGE_DREDD_TAB]: JUDGE_DREDD,
+  [MONSTER_DERBY_TAB]: MONSTER_DERBY,
+  [SUPER_SLAPSHOT_TAB]: SUPER_SLAPSHOT,
+  [ZARGOS_TAB]: ZARGOS,
+};
 
 // type tab chosen by the player: read from ?type=Wargame, then kept there
 let selectedType: GameType | null = readGameType(
@@ -141,7 +173,15 @@ function readGameType(value: string | null | undefined): GameType | null {
   return GAME_TYPES.find((type) => type.toLowerCase() === value?.toLowerCase()) ?? null;
 }
 
+// a game in prototyping, its key given or not
+function isPrototype(gameName: string): boolean {
+  const service = REFEREED_SERVICES[gameName];
+  if (service) return servicePrivate(service);
+  return gameInfo[gameName]?.private === true;
+}
+
 function gameTypeOf(gameName: string): GameType {
+  if (isPrototype(gameName)) return "Prototype";
   if (REFEREED_GAMES.includes(gameName)) return "Refereed";
   return readGameType(gameInfo[gameName]?.type) ?? DEFAULT_GAME_TYPE;
 }
@@ -158,7 +198,18 @@ function offeredGameNames(): string[] {
   return names.sort((a, b) => a.localeCompare(b));
 }
 
+// a game in prototyping whose key was not given during this visit
+function gameLocked(name: string): boolean {
+  const service = REFEREED_SERVICES[name];
+  if (service) return serviceLocked(service);
+  return gameInfo[name]?.private === true && !prototypeKey(name);
+}
+
 function tabLabel(name: string): string {
+  return (gameLocked(name) ? LOCKED_MARK : "") + gameLabel(name);
+}
+
+function gameLabel(name: string): string {
   if (name === AIR_FORCE_TAB) return AIR_FORCE_LABEL;
   if (name === JUDGE_DREDD_TAB) return JUDGE_DREDD_LABEL;
   if (name === MONSTER_DERBY_TAB) return MONSTER_DERBY_LABEL;
@@ -170,13 +221,19 @@ function tabLabel(name: string): string {
 
 // The type tab shown: the one the player chose, else the one of the game the
 // page was opened on (?game=), else the first type that has a game.
+// the type tabs shown: the Prototypes tab only when a prototype is offered
+function shownGameTypes(): GameType[] {
+  const offered = offeredGameNames();
+  return GAME_TYPES.filter((type) => type !== "Prototype" || offered.some(isPrototype));
+}
+
 function activeGameType(): GameType {
-  if (selectedType) return selectedType;
+  if (selectedType && shownGameTypes().includes(selectedType)) return selectedType;
   const offered = offeredGameNames();
   const wanted = selectedGame?.toLowerCase();
   const opened = offered.find((name) => name.toLowerCase() === wanted);
   if (opened) return gameTypeOf(opened);
-  return GAME_TYPES.find((type) => offered.some((name) => gameTypeOf(name) === type)) ?? GAME_TYPES[0];
+  return shownGameTypes().find((type) => offered.some((name) => gameTypeOf(name) === type)) ?? GAME_TYPES[0];
 }
 
 function selectGameType(type: GameType): void {
@@ -204,6 +261,38 @@ function activeGameName(): string | null {
 // modales, donc il est mémorisé au moment de la confirmation et pas lu depuis
 // l'onglet courant à la réception de la réponse.
 let openingGameName: string | null = null;
+
+// the key of a table game sent to the server, waiting for its answer
+let pendingUnlock: { gameName: string; key: string; resolve: (error: string | null) => void } | null = null;
+
+// asks the server (Tourtoirac, then Chabanas) whether that key opens the game
+function unlockTableGame(gameName: string, key: string): Promise<string | null> {
+  const socket = getSocket();
+  if (!socket) return Promise.resolve("Le serveur ne répond pas.");
+  pendingUnlock?.resolve(null);
+  return new Promise((resolve) => {
+    pendingUnlock = { gameName, key, resolve };
+    socket.send({ action: "unlock_game", game_name: gameName, prototype_key: key });
+  });
+}
+
+// the key of a refereed game, checked by its Hautefort module
+async function unlockRefereedGame(service: URL, key: string): Promise<string | null> {
+  if (!(await unlockService(service, key))) return WRONG_KEY_MESSAGE;
+  renderAll();
+  return null;
+}
+
+// a creation or a join refused for the key kept: it no longer opens the game
+function prototypeRefused(): void {
+  if (openingGameName) forgetPrototypeKey(openingGameName);
+  openingGameName = null;
+  lastJoinAttempt = null;
+  closeCreateModal();
+  closeJoinModal();
+  window.alert("Ce jeu est en prototypage : la clé donnée n'est plus valable.");
+  renderAll();
+}
 
 // -------------------------------------------------
 // Journal du cartouche : les N derniers messages reçus
@@ -306,10 +395,23 @@ function handleServerMessage(data: ServerMessage): void {
     } else if (data.event === "session_created" || data.event === "session_joined") {
       // message de session reçu après create_session ou join_session
       handleSessionCreated(data as unknown as SessionCreatedEvent);
+    } else if (data.event === "game_unlocked") {
+      // the answer to unlock_game; another tab of the shared socket may have asked
+      if (pendingUnlock && pendingUnlock.gameName === data.game_name) {
+        storePrototypeKey(pendingUnlock.gameName, pendingUnlock.key);
+        pendingUnlock.resolve(null);
+        pendingUnlock = null;
+        renderAll();
+      }
     } else if (data.event === "error") {
       const code = (data as unknown as ServerErrorEvent).error?.code;
       // le serveur a refuse l'adhesion : on rend la modale pour corriger
-      if (code === "invalid_nationality" && lastJoinAttempt === null) {
+      if (code === "prototype_key_incorrect" && pendingUnlock) {
+        pendingUnlock.resolve(WRONG_KEY_MESSAGE);
+        pendingUnlock = null;
+      } else if (code === "prototype_key_incorrect") {
+        prototypeRefused();
+      } else if (code === "invalid_nationality" && lastJoinAttempt === null) {
         // refused creation: the modal normally prevents it, the game may have
         // changed since the lobby read its description
         openingGameName = null;
@@ -504,6 +606,8 @@ async function confirmCreateSession(): Promise<void> {
     access_key: accessKey,
   };
   if (pendingNationalities.length > 0) message.nationality = nationality;
+  // a game in prototyping: the key given when its tab was unlocked
+  if (gameName && prototypeKey(gameName)) message.prototype_key = prototypeKey(gameName);
 
   // sans description exploitable, on laisse Chabanas appliquer ses valeurs
   if (pendingPlayerLimits) {
@@ -705,6 +809,7 @@ async function confirmJoinSession(): Promise<void> {
   // attendre, et une key vide pourrait être prise pour une key saisie
   if (!isWatcher) joinMessage.key = key;
   if (pendingJoin.nationalities.length > 0) joinMessage.nationality = nationality;
+  if (prototypeKey(pendingJoin.gameName)) joinMessage.prototype_key = prototypeKey(pendingJoin.gameName);
   getSocket()?.send(joinMessage);
   storePlayerIdentity(nickname, pendingJoin.role);
   closeJoinModal();
@@ -729,7 +834,7 @@ function hideError(id: string): void {
 function renderTypeTabs(): void {
   const active = activeGameType();
   typeTabsContainer.replaceChildren(
-    ...GAME_TYPES.map((type) => {
+    ...shownGameTypes().map((type) => {
       const btn = document.createElement("button");
       btn.className = "type-tab" + (type === active ? " active" : "");
       btn.textContent = TYPE_LABELS[type];
@@ -777,6 +882,16 @@ function renderAll(): void {
     container.className = "table-container" + (index === activeIndex ? " active" : "");
     container.id = "table-" + index;
 
+    // a game in prototyping shows nothing of its games before its key is given
+    if (gameLocked(name)) {
+      const service = REFEREED_SERVICES[name];
+      renderLockedTab(container, gameLabel(name), (key) =>
+        service ? unlockRefereedGame(service, key) : unlockTableGame(name, key),
+      );
+      tablesContainer.appendChild(container);
+      return;
+    }
+
     // the refereed games are played in their own service, not on the OBG table
     if (REFEREED_GAMES.includes(name)) {
       const renderTab = name === AIR_FORCE_TAB ? renderAirForceTab
@@ -787,6 +902,9 @@ function renderAll(): void {
       tablesContainer.appendChild(container);
       return;
     }
+
+    const documents = renderDocumentsSelect(game?.documents ?? []);
+    if (documents) container.appendChild(documents);
 
     if (sessions.length > 0) {
       const table = document.createElement("table");
@@ -917,6 +1035,25 @@ function renderAll(): void {
 
     tablesContainer.appendChild(container);
   });
+}
+
+// The documents of the game (rules, charts...), above its sessions: the same
+// select as in the game page, under a first "Consulter" entry that only serves
+// as a label. Those of the variants are only given to their sessions.
+function renderDocumentsSelect(documents: SessionDocument[]): HTMLSelectElement | null {
+  if (documents.length === 0) return null;
+  const select = document.createElement("select");
+  select.className = "documents-select";
+  select.setAttribute("aria-label", "Consulter un document du jeu");
+  select.add(new Option("Consulter un document", ""));
+  for (const entry of documents) select.add(new Option(entry.name, entry.src));
+  select.addEventListener("change", () => {
+    const src = select.value;
+    // back to "Consulter": the same document can then be opened again
+    select.selectedIndex = 0;
+    if (src) window.open(src, "_blank", "noopener");
+  });
+  return select;
 }
 
 function switchTab(btn: HTMLButtonElement, index: number, gameName: string): void {

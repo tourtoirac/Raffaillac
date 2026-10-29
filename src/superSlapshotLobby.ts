@@ -16,6 +16,7 @@ import {
   textField,
   watchersCheckbox,
 } from "./serviceModal";
+import { setServicePrivate } from "./prototype";
 import { emptyListMessage, matchesSearch } from "./sessionList";
 import type { Pager } from "./sessionList";
 
@@ -25,7 +26,7 @@ export const SUPER_SLAPSHOT_TAB = "super_slapshot_refereed";
 export const SUPER_SLAPSHOT_LABEL = "Super Slapshot";
 
 // the Super Slapshot module of Hautefort
-const SUPER_SLAPSHOT = serviceUrl("hautefort/superslapshot/");
+export const SUPER_SLAPSHOT = serviceUrl("hautefort/superslapshot/");
 // seat tokens, read back by the Super Slapshot game page (same origin, same tab)
 const SEATS_KEY = "superslapshot_seats";
 
@@ -94,11 +95,13 @@ export function startSuperSlapshotLobby(onChange: () => void): void {
     url.protocol = url.protocol === "https:" ? "wss:" : "ws:";
     const ws = new WebSocket(url);
     ws.onmessage = (e) => {
-      const data = JSON.parse(e.data as string) as { event: string; games?: SuperSlapshotGame[]; active?: boolean };
+      const data = JSON.parse(e.data as string) as { event: string; games?: SuperSlapshotGame[]; active?: boolean; private?: boolean };
       if (data.event !== "games") return;
       games = data.games ?? [];
       // absent from an older Hautefort: the module is on
       active = data.active !== false;
+      // in prototyping: the lobby locks the tab until its key is given
+      setServicePrivate(SUPER_SLAPSHOT, data.private === true);
       connected = true;
       delay = 2000;
       rerender();

@@ -15,16 +15,17 @@ import {
   textField,
   watchersCheckbox,
 } from "./serviceModal";
+import { setServicePrivate } from "./prototype";
 import { emptyListMessage, matchesSearch } from "./sessionList";
 import type { Pager } from "./sessionList";
 
-// not "zargos": the lobby compares game names whatever their case, and the table
-// version of the game is Zargos in Chabanas
+// not "zargos": the lobby compares game names whatever their case, and a table
+// version of the game named Zargos may come back in Chabanas
 export const ZARGOS_TAB = "zargos_refereed";
 export const ZARGOS_LABEL = "Zargos";
 
 // the Zargos module of Hautefort
-const ZARGOS = serviceUrl("hautefort/zargos/");
+export const ZARGOS = serviceUrl("hautefort/zargos/");
 // seat tokens, read back by the Zargos game page (same origin, same tab)
 const SEATS_KEY = "zargos_seats";
 
@@ -91,11 +92,13 @@ export function startZargosLobby(onChange: () => void): void {
     url.protocol = url.protocol === "https:" ? "wss:" : "ws:";
     const ws = new WebSocket(url);
     ws.onmessage = (e) => {
-      const data = JSON.parse(e.data as string) as { event: string; games?: ZargosGame[]; active?: boolean };
+      const data = JSON.parse(e.data as string) as { event: string; games?: ZargosGame[]; active?: boolean; private?: boolean };
       if (data.event !== "games") return;
       games = data.games ?? [];
       // absent from an older Hautefort: the module is on
       active = data.active !== false;
+      // in prototyping: the lobby locks the tab until its key is given
+      setServicePrivate(ZARGOS, data.private === true);
       connected = true;
       delay = 2000;
       rerender();

@@ -544,7 +544,7 @@ export interface ShowEvent {
   component_ids: string[];
 }
 
-/** a document of the game ("documents" of its game_json): always a PDF */
+/** a document of a game or a variant (its documents field in Chabanas, given to a session as the "documents" of its game_json) */
 export interface SessionDocument {
   src: string;
   name: string;
@@ -603,7 +603,8 @@ export interface GameVariantInfo {
  * "Refereed" is the lobby's own: the games whose rules are applied by a
  * service of their own (Hautefort), never set by Chabanas.
  */
-export type GameType = "Boardgame" | "Wargame" | "Refereed";
+// "Prototype": a game in prototyping, whatever its type, listed apart from the others
+export type GameType = "Boardgame" | "Wargame" | "Refereed" | "Prototype";
 
 export interface GameInfo {
   name: string;
@@ -613,6 +614,10 @@ export interface GameInfo {
   thumbnail_display?: string;
   /** absent from an older Chabanas: the game is then filed as a wargame */
   type?: GameType;
+  /** a game in prototyping: the lobby asks for its key before showing it */
+  private?: boolean;
+  /** the documents of the game (not of its variants), listed above its sessions */
+  documents?: SessionDocument[];
   variant?: Record<string, GameVariantInfo>;
 }
 
