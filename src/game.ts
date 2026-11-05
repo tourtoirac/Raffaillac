@@ -61,6 +61,8 @@ import handCardsIcon from "../../Common/resources/hand_cards.svg?raw";
 import eyeIcon from "../../Common/resources/eye.svg?raw";
 import { lobbyReturnUrl, originGameName } from "./navigation";
 import { bindShareLink } from "./shareLink";
+import { bindDebugState, debugStateRefused, receiveDebugState } from "./debugState";
+import { handleMaintenanceMessage } from "./maintenance";
 import { acquireGameLock, GAME_OPEN_ELSEWHERE_MESSAGE } from "./gameLock";
 import { invalidComponentMessage, serverFullMessage } from "./serverErrors";
 import { adoptAdminSession, clearSession, loadPlayerIdentity, loadSession, storeSession } from "./session";
@@ -1081,6 +1083,17 @@ const sessionInfo = document.getElementById("session-info");
 // session has a code and is not closed
 const shareLinkButton = document.getElementById("share-link") as HTMLButtonElement | null;
 if (shareLinkButton) bindShareLink(shareLinkButton, () => currentSession?.code);
+
+// development only (localhost): copies the game_json the session would store now
+const debugStateButton = document.getElementById("debug-state") as HTMLButtonElement | null;
+if (debugStateButton) {
+  bindDebugState(debugStateButton, () => {
+    const socket = getSocket();
+    if (!socket) return false;
+    socket.send({ action: "debug_state" });
+    return true;
+  });
+}
 
 // Le bandeau affiche le jeu et le joueur plutôt que le nom du site : on sait
 // d'un coup d'œil où l'on est et sous quelle identité.
@@ -2151,6 +2164,9 @@ function edgeSignedOnAxis(position: number, extent: number, endBand = EDGE_BAND)
 function edgeScrollVector(): [number, number] {
   const eased = (fraction: number): number =>
     Math.sign(fraction) * Math.abs(fraction) ** EDGE_EASE * EDGE_SCROLL_SPEED;
+  // over the column of the generators (grabbing a model, giving a copy back)
+  // the camera stays still, even inside the band of the top edge
+  if (overGenerators(edgeClientX, edgeClientY)) return [0, 0];
   const area = edgeArea();
   return [
     eased(edgeSignedOnAxis(edgeClientX - area.left, area.right - area.left, area.rightBand)),
@@ -4276,6 +4292,9 @@ function draw(): void {
 function handleServerMessage(raw: unknown): void {
   const data = raw as GameServerMessage;
   if (!data || typeof data !== "object") return;
+  // a maintenance of the site announced, started or over (maintenance.ts): when
+  // it starts the server closes the connection, the page reconnects afterwards
+  if (handleMaintenanceMessage(data)) return;
 
   // the WebRTC messages relayed between players are many and long: not logged
   if (data.event !== "voice_signal" && data.event !== "view") console.log("[WS] Message reçu :", JSON.stringify(data));
@@ -4362,8 +4381,11 @@ function handleServerMessage(raw: unknown): void {
       }
     } else if (data.event === "session_deleted") {
       applySessionDeleted();
+    } else if (data.event === "debug_state") {
+      void receiveDebugState(data.content);
     } else if (data.event === "error") {
-      reportServerError(data as unknown as ServerErrorEvent);
+      const error = data as unknown as ServerErrorEvent;
+      if (!debugStateRefused(error.error?.code)) reportServerError(error);
     } else if (data.event === "session_created" || data.event === "session_joined") {
       handleSessionEvent(data);
     }

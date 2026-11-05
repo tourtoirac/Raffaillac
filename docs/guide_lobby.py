@@ -140,7 +140,7 @@ class Guide(FPDF):
 def draw_lobby_diagram(pdf, top):
     """Simplified drawing of the lobby page, with numbered markers."""
     x0, w0 = pdf.l_margin, pdf.w - pdf.l_margin - pdf.r_margin
-    h0 = 90
+    h0 = 96
     pdf.box(x0, top, w0, h0, PAGE_BG, MID_GREY, radius=2)
 
     # title and help link
@@ -150,22 +150,31 @@ def draw_lobby_diagram(pdf, top):
     pdf.line(x0 + w0 - 19, top + 9.2, x0 + w0 - 4, top + 9.2)
     pdf.marker(x0 + w0 - 38, top + 7, 1)
 
-    # type tabs (the log of server messages is only shown on localhost: not drawn)
-    ty = top + 16
-    pdf.box(x0 + 4, ty, 28, 8, BLUE, BLUE)
-    pdf.label(x0 + 4, ty, 28, 8, "Boardgame", 8, (255, 255, 255), True)
-    pdf.box(x0 + 33, ty, 24, 8, GREY, MID_GREY)
-    pdf.label(x0 + 33, ty, 24, 8, "Wargame", 8)
-    pdf.box(x0 + 58, ty, 24, 8, GREY, MID_GREY)
-    pdf.label(x0 + 58, ty, 24, 8, "Arbitrés", 8)
+    # type tabs under their group title (the log of server messages is only shown on
+    # localhost: not drawn); the Prototypes tab only shows when a prototype is offered
+    ty = top + 21
+    groups = [("ARBITRÉS", x0 + 4, ["Boardgame", "Wargame"]), ("NON ARBITRÉS", x0 + 60, ["Boardgame", "Wargame"]),
+              (None, x0 + 116, ["Prototypes"])]
+    for title, gx, tabs in groups:
+        x = gx
+        for j, name in enumerate(tabs):
+            active = title == "ARBITRÉS" and j == 0
+            pdf.box(x, ty, 26, 8, BLUE if active else GREY, BLUE if active else MID_GREY)
+            pdf.label(x, ty, 26, 8, name, 8, (255, 255, 255) if active else TEXT, active)
+            x += 27
+        if title:
+            pdf.label(gx, ty - 6, x - gx - 1, 5, title, 6.5, MUTED, True)
+            pdf.set_draw_color(*MID_GREY)
+            pdf.set_line_width(0.2)
+            pdf.line(gx, ty - 1, x - 1, ty - 1)
     pdf.set_draw_color(*BLUE)
     pdf.set_line_width(0.6)
     pdf.line(x0 + 4, ty + 8, x0 + w0 - 4, ty + 8)
-    pdf.marker(x0 + 86, ty + 4, 2)
+    pdf.marker(x0 + 148, ty + 4, 2)
 
     # game tabs
-    gy = top + 29
-    for i, name in enumerate(["Carcassonne", "Catan", "Splendor"]):
+    gy = top + 34
+    for i, name in enumerate(["Judge Dredd", "Monster Derby", "Zargos"]):
         active = i == 0
         pdf.box(x0 + 4, gy + i * 10, 34, 8, (255, 255, 255) if active else GREY,
                 BLUE if active else MID_GREY)
@@ -248,8 +257,10 @@ def build():
     pdf.table([
         ["", "Élément", "Rôle"],
         ["1", "Lien « Aide »", "Ouvre ce guide dans un nouvel onglet."],
-        ["2", "Onglets de type de jeu", "Boardgame (jeux de plateau), Wargame (jeux de guerre) ou "
-                                        "Arbitrés (jeux dont le serveur applique les règles)."],
+        ["2", "Onglets de type de jeu", "Deux groupes : « Arbitrés » (le serveur applique les règles) puis "
+                                        "« Non arbitrés » (les joueurs appliquent les règles), chacun avec "
+                                        "Boardgame (jeux de plateau) et Wargame (jeux de guerre) ; puis "
+                                        "Prototypes, quand un jeu est en cours de mise au point."],
         ["3", "Liste des jeux", "Les jeux du type choisi ; cliquer sur un jeu affiche ses parties."],
         ["4", "Joueurs d'une partie", "Un bouton par joueur assis : vert s'il est en jeu, bleu si sa place est libre."],
         ["5", "Rejoindre", "« Join » pour prendre un nouveau siège, « Spectateur » pour regarder."],
@@ -259,35 +270,47 @@ def build():
     # ---- choosing a game ----
     pdf.h1("Choisir un jeu")
     pdf.para(
-        "Les jeux sont rangés en trois familles, accessibles par les onglets en haut de "
-        "la page : **Boardgame**, **Wargame** et **Arbitrés**. La colonne de gauche liste "
-        "les jeux de la famille affichée, par ordre alphabétique ; le jeu sélectionné est "
-        "encadré en bleu."
+        "Les onglets en haut de la page rangent les jeux en deux groupes : **Arbitrés** "
+        "d'abord, puis **Non arbitrés**. Chaque groupe a un onglet **Boardgame** (jeux de "
+        "plateau) et un onglet **Wargame** (jeux de guerre). La colonne de gauche liste les "
+        "jeux de l'onglet affiché, par ordre alphabétique ; le jeu sélectionné est encadré "
+        "en bleu."
     )
     pdf.bullets([
+        "Au-dessus des parties d'un jeu, le menu **Consulter un document** ouvre ses règles, "
+        "aides de jeu et guides dans un nouvel onglet.",
+        "L'onglet **Prototypes** n'apparaît que lorsqu'un jeu est en cours de mise au point. "
+        "Un jeu marqué d'un cadenas 🔒 demande d'abord la clé que vous a donnée "
+        "l'administrateur ; elle est retenue pendant la visite.",
         "Le catalogue est fourni par le serveur : seuls les jeux activés par "
-        "l'administrateur apparaissent. Si une famille n'en contient aucun, le lobby "
+        "l'administrateur apparaissent. Si un onglet n'en contient aucun, le lobby "
         "affiche « Aucun jeu disponible ».",
-        "Le jeu et la famille choisis sont gardés dans l'adresse de la page "
+        "Le jeu et l'onglet choisis sont gardés dans l'adresse de la page "
         "(?game=…&type=…). Recharger la page ou revenir d'une partie ramène donc sur "
         "le même jeu, et l'adresse peut être partagée avec un ami.",
     ])
 
     pdf.h2("Les jeux arbitrés")
     pdf.para(
-        "Sur la table de jeu ordinaire, ce sont les joueurs qui appliquent les règles : "
-        "le site déplace les pièces et les cartes comme on le ferait autour d'une vraie "
-        "table. Les jeux de l'onglet **Arbitrés** (aujourd'hui **Air Force** et **Judge "
-        "Dredd**) se jouent au contraire sur une page qui leur est propre, où le serveur "
+        "Sur la table de jeu ordinaire (onglets **Non arbitrés**), ce sont les joueurs qui "
+        "appliquent les règles : le site déplace les pièces et les cartes comme on le ferait "
+        "autour d'une vraie table. Les jeux des onglets **Arbitrés** (par exemple **Air "
+        "Force**, **Napoleon at Waterloo** en Wargame, **Judge Dredd**, **Monster Derby** en "
+        "Boardgame) se jouent au contraire sur une page qui leur est propre, où le serveur "
         "fait respecter les règles : il n'accepte que les coups permis, lance les dés et "
-        "garde secret ce qui doit l'être."
+        "garde secret ce qui doit l'être. Chacun a un guide d'utilisation dans son menu "
+        "**Consulter un document**."
     )
     pdf.bullets([
         "La liste, la création d'une partie, « Join », « Spectateur » et la reprise d'une "
-        "place s'y utilisent comme pour les autres jeux. Air Force demande en plus le camp "
-        "et l'avion, Judge Dredd la couleur du juge.",
-        "Une partie de **Judge Dredd** accueille 2 à 6 joueurs ; elle commence quand son "
-        "créateur clique sur « Lancer la partie », sur la page de jeu.",
+        "place s'y utilisent comme pour les autres jeux. Le formulaire de création demande "
+        "en plus ce que le jeu exige : un camp, une couleur, un scénario, des options…",
+        "Un jeu marqué 🤖 se joue aussi **contre l'ordinateur** : selon le jeu, on le choisit "
+        "comme adversaire dans le formulaire de création, ou l'on ajoute des joueurs "
+        "ordinateur sur la page de jeu avant de lancer la partie.",
+        "Une partie à plus de deux joueurs (Judge Dredd, Monster Derby…) commence quand son "
+        "créateur la lance, sur la page de jeu ; une partie à deux commence dès que le "
+        "second joueur prend la place libre.",
         "Si le serveur d'un jeu arbitré ne répond pas, son onglet disparaît jusqu'à son retour.",
     ])
 

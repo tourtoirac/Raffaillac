@@ -61,6 +61,118 @@ interface Catalog {
   sets: { key: string; name: string }[];
   monsters: { min: number; max: number };
   boards: { min: number; max: number };
+  /** the creature sets a game draws from (absent from an older Hautefort: base only) */
+  creature_sets?: CreatureSet[];
+  /** picture sets that only have the base creatures (legacy) */
+  base_only_sets?: string[];
+}
+
+interface CreatureSet {
+  key: string;
+  name: string;
+  default: boolean;
+  monsters: { key: string; name: string; native: string[] }[];
+}
+
+// the color of the nameplate of a creature, as on its counter: its native terrain,
+// white without one, a rainbow when native to all five
+const TERRAIN_COLORS: Record<string, string> = {
+  brown: "#8b5a2b", grey: "#8a8f96", green: "#3f9b3a", orange: "#e58a1f", blue: "#2a6fd1",
+};
+const RAINBOW = "linear-gradient(90deg, #8b5a2b, #8a8f96, #3f9b3a, #e58a1f, #2a6fd1)";
+
+function plateStyle(native: string[]): { background: string; color: string } {
+  if (native.length === 0) return { background: "#ffffff", color: "#222" };
+  if (native.length > 1) return { background: RAINBOW, color: "#fff" };
+  return { background: TERRAIN_COLORS[native[0]] ?? "#ffffff", color: "#fff" };
+}
+
+/** The list of the creatures of a set, each on a band of the color of its native terrain. */
+function creatureList(set: CreatureSet): HTMLDivElement {
+  const box = document.createElement("div");
+  box.className = "md-creature-tip";
+  Object.assign(box.style, {
+    position: "fixed", zIndex: "10001", display: "none", maxWidth: "460px", padding: "8px",
+    background: "#fff", border: "1px solid #bbb", borderRadius: "6px", boxShadow: "0 4px 16px rgba(0,0,0,.35)",
+    columnCount: "2", columnGap: "6px", fontSize: "13px",
+  });
+  const title = document.createElement("div");
+  title.textContent = set.name;
+  Object.assign(title.style, { fontWeight: "bold", marginBottom: "6px", columnSpan: "all" });
+  box.appendChild(title);
+  const order = ["brown", "grey", "green", "orange", "blue"];
+  const rank = (native: string[]) => (native.length === 1 ? order.indexOf(native[0]) : native.length ? 5 : 6);
+  for (const m of [...set.monsters].sort((a, b) => rank(a.native) - rank(b.native) || a.name.localeCompare(b.name))) {
+    const band = document.createElement("div");
+    band.textContent = m.name;
+    const style = plateStyle(m.native);
+    Object.assign(band.style, {
+      background: style.background, color: style.color, padding: "2px 8px", margin: "0 0 3px",
+      borderRadius: "3px", border: "1px solid rgba(0,0,0,.25)", breakInside: "avoid", fontWeight: "bold",
+      textShadow: style.color === "#fff" ? "0 1px 1px rgba(0,0,0,.6)" : "none",
+    });
+    box.appendChild(band);
+  }
+  return box;
+}
+
+/** A check box per creature set, each followed by a "?" showing its creatures; the
+ * sets other than base are offered only when the picture set has their counters. */
+function creatureSetBoxes(sets: CreatureSet[], counters: HTMLSelectElement, baseOnly: string[]): Map<string, HTMLInputElement> {
+  const boxes = new Map<string, HTMLInputElement>();
+  const rows: HTMLDivElement[] = [];
+  for (const set of sets) {
+    const row = document.createElement("div");
+    row.className = "checkbox-row";
+    const box = document.createElement("input");
+    box.type = "checkbox";
+    box.id = `md-creatures-${set.key}`;
+    box.checked = set.default;
+    const label = document.createElement("label");
+    label.htmlFor = box.id;
+    label.textContent = set.name;
+    const help = document.createElement("span");
+    help.textContent = "?";
+    help.setAttribute("aria-label", `Créatures du ${set.name.toLowerCase()}`);
+    Object.assign(help.style, {
+      display: "inline-flex", alignItems: "center", justifyContent: "center", width: "18px", height: "18px",
+      marginLeft: "6px", borderRadius: "50%", background: "#007bff", color: "#fff", fontWeight: "bold",
+      fontSize: "12px", cursor: "help", flex: "none",
+    });
+    const tip = creatureList(set);
+    document.body.appendChild(tip);
+    help.addEventListener("mouseenter", () => {
+      tip.style.display = "block";
+      const r = help.getBoundingClientRect();
+      const left = Math.min(r.right + 8, window.innerWidth - tip.offsetWidth - 8);
+      const top = Math.max(8, Math.min(r.top - 20, window.innerHeight - tip.offsetHeight - 8));
+      tip.style.left = `${Math.max(8, left)}px`;
+      tip.style.top = `${top}px`;
+    });
+    help.addEventListener("mouseleave", () => { tip.style.display = "none"; });
+    row.append(box, label, help);
+    rows.push(row);
+    boxes.set(set.key, box);
+  }
+  const sync = () => {
+    const only = baseOnly.includes(counters.value);
+    for (const [key, box] of boxes) {
+      if (key === "base") continue;
+      box.disabled = only;
+      if (only) box.checked = false;
+      box.parentElement!.style.opacity = only ? "0.5" : "";
+      box.parentElement!.title = only ? "Pas de pions de ces créatures dans le set legacy" : "";
+    }
+  };
+  counters.addEventListener("change", sync);
+  sync();
+  // right below the choice of the picture set
+  let anchor: Element = counters;
+  for (const row of rows) {
+    anchor.insertAdjacentElement("afterend", row);
+    anchor = row;
+  }
+  return boxes;
 }
 
 let games: MonsterDerbyGame[] = [];
@@ -142,6 +254,7 @@ function openCreateModal(): void {
     return;
   }
   let watchers: HTMLInputElement | null = null;
+  let creatureBoxes = new Map<string, HTMLInputElement>();
   openModal(
     "Créer une partie — Monster Derby",
     [
@@ -163,11 +276,18 @@ function openCreateModal(): void {
           monsters: Number(v.monsters),
           boards: Number(v.boards),
           counters: v.counters,
+          ...(c.creature_sets ? { creatures: [...creatureBoxes].filter(([, box]) => box.checked).map(([key]) => key) } : {}),
         }),
       );
+      document.querySelectorAll(".md-creature-tip").forEach((tip) => tip.remove());
     },
-    (form) => {
+    (form, fields) => {
       watchers = watchersCheckbox(form, "md-allow-watchers");
+      const counters = fields.get("counters")?.input;
+      if (c.creature_sets && counters instanceof HTMLSelectElement) {
+        document.querySelectorAll(".md-creature-tip").forEach((tip) => tip.remove());
+        creatureBoxes = creatureSetBoxes(c.creature_sets, counters, c.base_only_sets ?? ["legacy"]);
+      }
     },
   );
 }

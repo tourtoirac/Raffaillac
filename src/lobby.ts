@@ -34,7 +34,19 @@ import {
   superSlapshotAvailable,
   superSlapshotGames,
 } from "./superSlapshotLobby";
+import { WATERLOO, WATERLOO_LABEL, WATERLOO_TAB, renderWaterlooTab, startWaterlooLobby, waterlooAvailable, waterlooGames } from "./waterlooLobby";
+import {
+  WAR_OF_THE_RING,
+  WAR_OF_THE_RING_LABEL,
+  WAR_OF_THE_RING_TAB,
+  renderWarOfTheRingTab,
+  startWarOfTheRingLobby,
+  warOfTheRingAvailable,
+  warOfTheRingGames,
+} from "./warOfTheRingLobby";
+import { ALAMO, ALAMO_LABEL, ALAMO_TAB, alamoAvailable, alamoGames, renderAlamoTab, startAlamoLobby } from "./alamoLobby";
 import { ZARGOS, ZARGOS_LABEL, ZARGOS_TAB, renderZargosTab, startZargosLobby, zargosAvailable, zargosGames } from "./zargosLobby";
+import { SHERLOCK, SHERLOCK_LABEL, SHERLOCK_TAB, renderSherlockTab, sherlockAvailable, sherlockGames, startSherlockLobby } from "./sherlockLobby";
 import { GAME_OPEN_ELSEWHERE_MESSAGE, isGameOpenElsewhere } from "./gameLock";
 import { gameEntryUrl } from "./navigation";
 import { serviceDocuments } from "./serviceDocuments";
@@ -65,6 +77,10 @@ import { invalidComponentMessage, serverFullMessage } from "./serverErrors";
 import { Pager, emptyListMessage, highlightedCode, highlightedFirst, isHighlighted, matchesSearch } from "./sessionList";
 import { getSocket } from "./ws/wsClient";
 import type { SocketStateMessage } from "./ws/wsClient";
+import { handleMaintenanceMessage, setMaintenanceContext } from "./maintenance";
+
+// the notice of a maintenance speaks of the games, not of one game
+setMaintenanceContext("lobby");
 
 
 interface ServerMessage {
@@ -152,21 +168,34 @@ function selectedGameIndex(gameNames: string[]): number {
 // The games in prototyping are listed apart, under a tab of their own shown only
 // when there is one: a public version and a prototype of the same game live side
 // by side, each under its tab.
-const GAME_TYPES: GameType[] = ["Boardgame", "Wargame", "Refereed", "Prototype"];
+const GAME_TYPES: GameType[] = ["RefereedBoardgame", "RefereedWargame", "Boardgame", "Wargame", "Prototype"];
 const DEFAULT_GAME_TYPE: GameType = "Wargame";
 const TYPE_LABELS: Record<GameType, string> = {
+  RefereedBoardgame: "Boardgame",
+  RefereedWargame: "Wargame",
   Boardgame: "Boardgame",
   Wargame: "Wargame",
-  Refereed: "Arbitrés",
   Prototype: "Prototypes",
 };
-const REFEREED_GAMES = [AIR_FORCE_TAB, JUDGE_DREDD_TAB, MONSTER_DERBY_TAB, SUPER_SLAPSHOT_TAB, ZARGOS_TAB];
+// the type tabs grouped under a title: refereed games first, then the table games
+const TYPE_GROUPS: { label: string | null; types: GameType[] }[] = [
+  { label: "Arbitrés", types: ["RefereedBoardgame", "RefereedWargame"] },
+  { label: "Non arbitrés", types: ["Boardgame", "Wargame"] },
+  { label: null, types: ["Prototype"] },
+];
+const REFEREED_GAMES = [AIR_FORCE_TAB, ALAMO_TAB, JUDGE_DREDD_TAB, MONSTER_DERBY_TAB, SHERLOCK_TAB, SUPER_SLAPSHOT_TAB, WAR_OF_THE_RING_TAB, WATERLOO_TAB, ZARGOS_TAB];
+// the family of each refereed game (Chabanas does not know them)
+const REFEREED_WARGAMES = [AIR_FORCE_TAB, ALAMO_TAB, WAR_OF_THE_RING_TAB, WATERLOO_TAB];
 // the Hautefort module of each refereed game: it checks the key of a prototype
 const REFEREED_SERVICES: Record<string, URL> = {
   [AIR_FORCE_TAB]: AIR_FORCE_SERVICE,
+  [ALAMO_TAB]: ALAMO,
   [JUDGE_DREDD_TAB]: JUDGE_DREDD,
   [MONSTER_DERBY_TAB]: MONSTER_DERBY,
+  [SHERLOCK_TAB]: SHERLOCK,
   [SUPER_SLAPSHOT_TAB]: SUPER_SLAPSHOT,
+  [WAR_OF_THE_RING_TAB]: WAR_OF_THE_RING,
+  [WATERLOO_TAB]: WATERLOO,
   [ZARGOS_TAB]: ZARGOS,
 };
 
@@ -176,6 +205,7 @@ let selectedType: GameType | null = readGameType(
 );
 
 function readGameType(value: string | null | undefined): GameType | null {
+  // an older link (?type=Refereed) matches no tab: the game of the address decides
   return GAME_TYPES.find((type) => type.toLowerCase() === value?.toLowerCase()) ?? null;
 }
 
@@ -188,7 +218,7 @@ function isPrototype(gameName: string): boolean {
 
 function gameTypeOf(gameName: string): GameType {
   if (isPrototype(gameName)) return "Prototype";
-  if (REFEREED_GAMES.includes(gameName)) return "Refereed";
+  if (REFEREED_GAMES.includes(gameName)) return REFEREED_WARGAMES.includes(gameName) ? "RefereedWargame" : "RefereedBoardgame";
   return readGameType(gameInfo[gameName]?.type) ?? DEFAULT_GAME_TYPE;
 }
 
@@ -197,9 +227,13 @@ function gameTypeOf(gameName: string): GameType {
 function offeredGameNames(): string[] {
   const names = Object.keys(sessionsData);
   if (airForceAvailable()) names.push(AIR_FORCE_TAB);
+  if (alamoAvailable()) names.push(ALAMO_TAB);
   if (judgeDreddAvailable()) names.push(JUDGE_DREDD_TAB);
   if (monsterDerbyAvailable()) names.push(MONSTER_DERBY_TAB);
+  if (sherlockAvailable()) names.push(SHERLOCK_TAB);
   if (superSlapshotAvailable()) names.push(SUPER_SLAPSHOT_TAB);
+  if (warOfTheRingAvailable()) names.push(WAR_OF_THE_RING_TAB);
+  if (waterlooAvailable()) names.push(WATERLOO_TAB);
   if (zargosAvailable()) names.push(ZARGOS_TAB);
   return names.sort((a, b) => a.localeCompare(b));
 }
@@ -212,14 +246,38 @@ function gameLocked(name: string): boolean {
 }
 
 function tabLabel(name: string): string {
-  return (gameLocked(name) ? LOCKED_MARK : "") + gameLabel(name);
+  return (gameLocked(name) ? LOCKED_MARK : "") + gameLabel(name) + (botGames.has(name) ? BOT_MARK : "");
+}
+
+// the refereed games whose service offers players of the computer (bot_levels in its
+// catalog): an icon on their tab; read from the service, so a game gaining bots gets it
+const BOT_MARK = " 🤖";
+const BOT_TITLE = "On peut y jouer contre l'ordinateur";
+const botGames = new Set<string>();
+
+function loadBotGames(onChange: () => void): void {
+  for (const [tab, service] of Object.entries(REFEREED_SERVICES)) {
+    void fetch(new URL("api/catalog", service))
+      .then((response) => (response.ok ? response.json() : null))
+      .then((catalog: { bot_levels?: unknown[] } | null) => {
+        if (catalog?.bot_levels?.length && !botGames.has(tab)) {
+          botGames.add(tab);
+          onChange();
+        }
+      })
+      .catch(() => undefined);
+  }
 }
 
 function gameLabel(name: string): string {
   if (name === AIR_FORCE_TAB) return AIR_FORCE_LABEL;
+  if (name === ALAMO_TAB) return ALAMO_LABEL;
   if (name === JUDGE_DREDD_TAB) return JUDGE_DREDD_LABEL;
   if (name === MONSTER_DERBY_TAB) return MONSTER_DERBY_LABEL;
+  if (name === SHERLOCK_TAB) return SHERLOCK_LABEL;
   if (name === SUPER_SLAPSHOT_TAB) return SUPER_SLAPSHOT_LABEL;
+  if (name === WAR_OF_THE_RING_TAB) return WAR_OF_THE_RING_LABEL;
+  if (name === WATERLOO_TAB) return WATERLOO_LABEL;
   if (name === ZARGOS_TAB) return ZARGOS_LABEL;
   const game = gameInfo[name];
   return game?.thumbnail_display || game?.display_name || name.charAt(0).toUpperCase() + name.slice(1);
@@ -257,7 +315,10 @@ function selectGameType(type: GameType): void {
 // type tab shown, one tab per game.
 function visibleGameNames(): string[] {
   const type = activeGameType();
-  return offeredGameNames().filter((name) => gameTypeOf(name) === type);
+  const names = offeredGameNames().filter((name) => gameTypeOf(name) === type);
+  // the refereed games have internal names (waterloo_refereed...): sorted by the name shown
+  if (type === "RefereedBoardgame" || type === "RefereedWargame") names.sort((a, b) => gameLabel(a).localeCompare(gameLabel(b), "fr", { sensitivity: "base" }));
+  return names;
 }
 
 // The game of the code given in the address (?code=), among the games offered:
@@ -266,9 +327,13 @@ let followCode = highlightedCode !== null;
 
 const REFEREED_LISTS: Record<string, () => readonly { code: string }[]> = {
   [AIR_FORCE_TAB]: airForceGames,
+  [ALAMO_TAB]: alamoGames,
   [JUDGE_DREDD_TAB]: judgeDreddGames,
   [MONSTER_DERBY_TAB]: monsterDerbyGames,
+  [SHERLOCK_TAB]: sherlockGames,
   [SUPER_SLAPSHOT_TAB]: superSlapshotGames,
+  [WAR_OF_THE_RING_TAB]: warOfTheRingGames,
+  [WATERLOO_TAB]: waterlooGames,
   [ZARGOS_TAB]: zargosGames,
 };
 
@@ -414,6 +479,8 @@ function refreshSessions(): void {
 }
 
 function handleServerMessage(data: ServerMessage): void {
+  // a maintenance of the site announced, started or over (maintenance.ts)
+  if (handleMaintenanceMessage(data)) return;
   pushStatus(formatMessage(data));
   try {
     if (data.event === "list_game") {
@@ -455,6 +522,17 @@ function handleServerMessage(data: ServerMessage): void {
         window.alert(
           "Impossible de lancer la partie : plusieurs composants de ce jeu " +
             "portent le même identifiant. Le jeu doit être corrigé.",
+        );
+      } else if (code === "maintenance") {
+        // a maintenance of the site is announced: nobody creates or joins a game
+        // until it is over, only the players of a game come back to it
+        openingGameName = null;
+        lastJoinAttempt = null;
+        closeCreateModal();
+        closeJoinModal();
+        window.alert(
+          "Une maintenance du site est annoncée : impossible de créer ou de rejoindre une partie " +
+            "avant la fin de celle-ci (un joueur peut toujours reprendre sa place dans sa partie).",
         );
       } else if (code === "server_full") {
         // the platform runs its maximum number of games, every game included
@@ -862,15 +940,28 @@ function hideError(id: string): void {
 
 function renderTypeTabs(): void {
   const active = activeGameType();
+  const shown = shownGameTypes();
+  const tab = (type: GameType): HTMLButtonElement => {
+    const btn = document.createElement("button");
+    btn.className = "type-tab" + (type === active ? " active" : "");
+    btn.textContent = TYPE_LABELS[type];
+    btn.setAttribute("role", "tab");
+    btn.setAttribute("aria-selected", String(type === active));
+    btn.onclick = () => selectGameType(type);
+    return btn;
+  };
   typeTabsContainer.replaceChildren(
-    ...shownGameTypes().map((type) => {
-      const btn = document.createElement("button");
-      btn.className = "type-tab" + (type === active ? " active" : "");
-      btn.textContent = TYPE_LABELS[type];
-      btn.setAttribute("role", "tab");
-      btn.setAttribute("aria-selected", String(type === active));
-      btn.onclick = () => selectGameType(type);
-      return btn;
+    ...TYPE_GROUPS.filter((g) => g.types.some((t) => shown.includes(t))).map((g) => {
+      const group = document.createElement("div");
+      group.className = "type-group";
+      const label = document.createElement("div");
+      label.className = "type-group-label";
+      label.textContent = g.label ?? "\u00a0";
+      const tabs = document.createElement("div");
+      tabs.className = "type-group-tabs";
+      tabs.append(...g.types.filter((t) => shown.includes(t)).map(tab));
+      group.append(label, tabs);
+      return group;
     }),
   );
 }
@@ -907,6 +998,7 @@ function renderAll(): void {
     btn.className = "tab-button" + (index === activeIndex ? " active" : "");
     // the name stays the identifier sent to Chabanas: only the label changes
     btn.textContent = tabLabel(name);
+    if (botGames.has(name)) btn.title = BOT_TITLE;
     btn.onclick = () => switchTab(btn, index, name);
     tabsContainer.appendChild(btn);
 
@@ -927,9 +1019,13 @@ function renderAll(): void {
     // the refereed games are played in their own service, not on the OBG table
     if (REFEREED_GAMES.includes(name)) {
       const renderTab = name === AIR_FORCE_TAB ? renderAirForceTab
+        : name === ALAMO_TAB ? renderAlamoTab
         : name === JUDGE_DREDD_TAB ? renderJudgeDreddTab
         : name === MONSTER_DERBY_TAB ? renderMonsterDerbyTab
-        : name === SUPER_SLAPSHOT_TAB ? renderSuperSlapshotTab : renderZargosTab;
+        : name === SHERLOCK_TAB ? renderSherlockTab
+        : name === SUPER_SLAPSHOT_TAB ? renderSuperSlapshotTab
+        : name === WAR_OF_THE_RING_TAB ? renderWarOfTheRingTab
+        : name === WATERLOO_TAB ? renderWaterlooTab : renderZargosTab;
       // its documents, set by the administration of OBG, as those of a Chabanas game
       const refereedDocuments = renderDocumentsSelect(serviceDocuments(REFEREED_SERVICES[name]));
       if (refereedDocuments) container.appendChild(refereedDocuments);
@@ -1141,10 +1237,15 @@ function main(): void {
     refreshSessions();
   };
   startAirForceLobby(refereedChanged);
+  startAlamoLobby(refereedChanged);
   startJudgeDreddLobby(refereedChanged);
   startMonsterDerbyLobby(refereedChanged);
+  startSherlockLobby(refereedChanged);
   startSuperSlapshotLobby(refereedChanged);
+  startWarOfTheRingLobby(refereedChanged);
+  startWaterlooLobby(refereedChanged);
   startZargosLobby(refereedChanged);
+  loadBotGames(renderAll);
 }
 
 main();

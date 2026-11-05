@@ -12,7 +12,7 @@ export default defineConfig({
     outDir: "dist",
     emptyOutDir: true,
     sourcemap: true,
-    rollupOptions: {
+    rolldownOptions: {
       input: {
         index: resolve(import.meta.dirname, "index.html"),
         game: resolve(import.meta.dirname, "game.html"),

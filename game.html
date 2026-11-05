@@ -199,12 +199,14 @@
     }
     /* The models of the generators, one column against the left of the
        participants. A copy released over it is destroyed: it lights up while
-       a token is carried over it. */
+       a token is carried over it. Its models start 20 px lower, so that
+       grabbing the first one does not reach the band of the top edge that
+       scrolls the camera. */
     #generators {
       flex: none;
       width: 50px;
       margin-left: 12px;
-      padding: 4px 0;
+      padding: 24px 0 4px;
       box-sizing: border-box;
       display: flex;
       flex-direction: column;
@@ -794,6 +796,8 @@
       <!-- visible pour l'owner seul, tant que la partie n'a pas commencé -->
       <!-- the lobby address opened on this session (src/shareLink.ts) -->
       <button type="button" class="back" id="share-link" hidden>Copier le lien de la partie</button>
+      <!-- development only: shown on localhost (src/debugState.ts) -->
+      <button type="button" class="back" id="debug-state" hidden>Copier l'état (debug)</button>
       <button type="button" class="back" id="start-link" hidden>Démarrer la session</button>
       <button type="button" class="back" id="back-link">&larr; Quitter et reprendre plus tard</button>
       <!-- visible pour l'owner seul : le serveur le décide, pas cette page -->

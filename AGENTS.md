@@ -143,6 +143,16 @@ serveur.
   exception : les onglets des jeux arbitrés, qui parlent à Hautefort (voir
   § Lobby).
 
+### Onglets de type du lobby
+
+Décision de l'utilisateur du 03/11/2026 : deux groupes titrés, « Arbitrés » (onglets Boardgame et
+Wargame) puis « Non arbitrés » (Boardgame et Wargame, le `type` Chabanas du jeu), puis « Prototypes »
+quand un prototype est proposé (`TYPE_GROUPS`, `GameType` `RefereedBoardgame` / `RefereedWargame` /
+`Boardgame` / `Wargame` / `Prototype` dans `?type=`). La famille d'un jeu arbitré est celle du lobby :
+Wargame pour `REFEREED_WARGAMES` (Air Force, The Alamo, War of the Ring, Napoleon at Waterloo, validé par l'utilisateur),
+Boardgame pour les autres. Les jeux arbitrés sont triés par nom affiché. Un ancien lien `?type=Refereed`
+ne correspond à aucun onglet : le jeu de `?game=` décide.
+
 ### Documents du jeu dans le lobby
 
 `GameInfo.documents` (liste `list_game`, champ `documents` du **jeu** dans
@@ -180,6 +190,13 @@ sont dans `OBG/Prototypes`, monté en lecture seule et servi sous
 `/Prototypes/` par `nginx/default.conf`, avec `nosniff` et une CSP `sandbox` :
 un fichier envoyé par un développeur ne s'exécute jamais comme une page du site.
 
+### Icône des jeux contre l'ordinateur
+
+`lobby.ts` (`loadBotGames`, 02/11/2026) : au démarrage, le lobby lit `api/catalog` de chaque
+module arbitré (`REFEREED_SERVICES`) ; ceux dont le catalogue a des `bot_levels` (Monster
+Derby, Napoleon at Waterloo) prennent l'icône 🤖 sur leur onglet et le titre « On peut y jouer
+contre l'ordinateur ». Rien à déclarer : un module qui gagne des bots gagne l'icône.
+
 ### Onglet Monster Derby
 
 `src/monsterDerbyLobby.ts` (modèle de `judgeDreddLobby.ts`) : onglet
@@ -205,6 +222,43 @@ parmi les « Arbitrés », module `hautefort/zargos/` (créé le 26/10/2026). Pa
 la création ; 2 à 6 joueurs, couleur donnée par le module. La version table du jeu
 (`Zargos` dans Chabanas) a été supprimée le 27/10/2026. Branché dans `lobby.ts` (`REFEREED_GAMES`)
 et `activeGames.ts`.
+
+### Onglet Sherlock Holmes
+
+`src/sherlockLobby.ts` (modèle de `zargosLobby.ts`) : onglet `sherlock_refereed` parmi les
+« Arbitrés », module `hautefort/sherlock/` (créé le 02/11/2026). À la création : le nombre de
+manches (1 à 10, 6 par défaut) ; 3 à 8 joueurs, couleur donnée par le module. La version table
+(`SherlockHolmes` dans Chabanas) sera supprimée quand le module passera en production. Branché dans
+`lobby.ts` (`REFEREED_GAMES`) et `activeGames.ts`.
+
+### Onglet The Alamo
+
+`src/alamoLobby.ts` (modèle de `waterlooLobby.ts`) : onglet `alamo_refereed` parmi les « Arbitrés »,
+module `hautefort/alamo/` (créé le 03/11/2026). À la création : le camp (Texans ou Mexicains) et les trois
+règles optionnelles du livret (cases cochées par défaut, envoyées dans `options`) ; la partie démarre quand
+le second joueur prend le camp libre. La version table (`Alamo` dans Chabanas) sera supprimée quand le
+module passera en production. Branché dans `lobby.ts` (`REFEREED_GAMES`) et `activeGames.ts`.
+
+### Onglet War of the Ring
+
+`src/warOfTheRingLobby.ts` (modèle de `waterlooLobby.ts`) : onglet `war_of_the_ring_refereed` parmi les
+« Arbitrés » (famille Wargame), module `hautefort/warofthering/` (créé le 03/11/2026, demande de
+l'utilisateur). À la création : le scénario (Sauron pour l'instant ; plus tard Gondor, War of the Ring
+Characters, campagnes à 2 et à 3 joueurs), le camp (Sauron ou Alliance) et les renforts de Sauron
+(comme au livret ou un tour plus tôt, arbitrage q5) ; la partie démarre quand le second joueur prend le
+camp libre. Le nom d'onglet n'est pas `war_of_the_ring` : le jeu de table s'appelle `War_Of_The_Ring` dans
+Chabanas et le lobby compare les noms sans la casse. La variante Sauron de la table sera supprimée à la
+mise en production du module, après un dump (arbitrage q26). Branché dans `lobby.ts` (`REFEREED_GAMES`,
+`REFEREED_WARGAMES`, `REFEREED_SERVICES`, `REFEREED_LISTS`) et `activeGames.ts`.
+
+### Onglet Napoleon at Waterloo
+
+`src/waterlooLobby.ts` (modèle de `zargosLobby.ts`) : onglet `waterloo_refereed` parmi les
+« Arbitrés », module `hautefort/waterloo/` (créé le 01/11/2026). À la création : le camp
+(Français ou Alliés) et la variante (standard ou Grouchy, `games.scenario = 'grouchy'`) ;
+la partie démarre quand le second joueur prend le camp libre. La version table (`Waterloo`
+dans Chabanas, jeu n°1, variante Grouchy) a été supprimée en prod et en local le 01/11/2026,
+à la mise en prod du module. Branché dans `lobby.ts` (`REFEREED_GAMES`) et `activeGames.ts`.
 
 ### Administration d'OBG
 

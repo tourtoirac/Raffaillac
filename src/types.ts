@@ -599,12 +599,12 @@ export interface GameVariantInfo {
 }
 
 /**
- * the family of a game, set in Chabanas: one tab of the lobby per type.
- * "Refereed" is the lobby's own: the games whose rules are applied by a
- * service of their own (Hautefort), never set by Chabanas.
+ * the family of a game, set in Chabanas (Boardgame or Wargame): one tab of the lobby per type.
+ * "RefereedBoardgame" and "RefereedWargame" are the lobby's own: the games whose rules are
+ * applied by a service of their own (Hautefort), never set by Chabanas.
  */
 // "Prototype": a game in prototyping, whatever its type, listed apart from the others
-export type GameType = "Boardgame" | "Wargame" | "Refereed" | "Prototype";
+export type GameType = "RefereedBoardgame" | "RefereedWargame" | "Boardgame" | "Wargame" | "Prototype";
 
 export interface GameInfo {
   name: string;

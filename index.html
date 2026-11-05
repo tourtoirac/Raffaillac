@@ -137,9 +137,33 @@
     /* One horizontal tab per type of game, above the list of games. */
     .type-tabs {
       display: flex;
-      gap: 4px;
+      gap: 24px;
       margin-bottom: 16px;
       border-bottom: 2px solid #007bff;
+    }
+
+    /* the type tabs under their title: Arbitrés, Non arbitrés (then Prototypes) */
+    .type-group {
+      display: flex;
+      flex-direction: column;
+      align-items: stretch;
+    }
+
+    .type-group-label {
+      text-align: center;
+      font-size: 13px;
+      font-weight: bold;
+      color: #555;
+      text-transform: uppercase;
+      letter-spacing: 1px;
+      margin-bottom: 4px;
+      padding-bottom: 2px;
+      border-bottom: 1px solid #bbb;
+    }
+
+    .type-group-tabs {
+      display: flex;
+      gap: 4px;
     }
 
     .type-tab {

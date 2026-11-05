@@ -25,7 +25,17 @@ import {
   superSlapshotGames,
   superSlapshotMatches,
 } from "./superSlapshotLobby";
+import { WATERLOO_LABEL, WATERLOO_TAB, startWaterlooLobby, waterlooGames, waterlooMatches } from "./waterlooLobby";
+import {
+  WAR_OF_THE_RING_LABEL,
+  WAR_OF_THE_RING_TAB,
+  startWarOfTheRingLobby,
+  warOfTheRingGames,
+  warOfTheRingMatches,
+} from "./warOfTheRingLobby";
+import { ALAMO_LABEL, ALAMO_TAB, alamoGames, alamoMatches, startAlamoLobby } from "./alamoLobby";
 import { ZARGOS_LABEL, ZARGOS_TAB, startZargosLobby, zargosGames, zargosMatches } from "./zargosLobby";
+import { SHERLOCK_LABEL, SHERLOCK_TAB, sherlockGames, sherlockMatches, startSherlockLobby } from "./sherlockLobby";
 import { lobbyReturnUrl } from "./navigation";
 import { Pager, emptyListMessage, matchesSearch } from "./sessionList";
 import type { ActiveSession, GameInfo, ListGameEvent, SessionsInfoEvent } from "./types";
@@ -109,6 +119,46 @@ function rows(): Row[] {
     all.push({
       gameName: SUPER_SLAPSHOT_TAB,
       gameLabel: SUPER_SLAPSHOT_LABEL,
+      code: game.code,
+      players: game.players.map((p) => ({ nickname: p.nickname, owner: p.owner, connected: p.connected })),
+      started: game.status !== "waiting",
+    });
+  }
+  for (const game of alamoGames()) {
+    if (!alamoMatches(game, searchQuery)) continue;
+    all.push({
+      gameName: ALAMO_TAB,
+      gameLabel: ALAMO_LABEL,
+      code: game.code,
+      players: game.players.map((p) => ({ nickname: p.nickname, owner: p.owner, connected: p.connected })),
+      started: game.status !== "waiting",
+    });
+  }
+  for (const game of waterlooGames()) {
+    if (!waterlooMatches(game, searchQuery)) continue;
+    all.push({
+      gameName: WATERLOO_TAB,
+      gameLabel: WATERLOO_LABEL,
+      code: game.code,
+      players: game.players.map((p) => ({ nickname: p.nickname, owner: p.owner, connected: p.connected })),
+      started: game.status !== "waiting",
+    });
+  }
+  for (const game of warOfTheRingGames()) {
+    if (!warOfTheRingMatches(game, searchQuery)) continue;
+    all.push({
+      gameName: WAR_OF_THE_RING_TAB,
+      gameLabel: WAR_OF_THE_RING_LABEL,
+      code: game.code,
+      players: game.players.map((p) => ({ nickname: p.nickname, owner: p.owner, connected: p.connected })),
+      started: game.status !== "waiting",
+    });
+  }
+  for (const game of sherlockGames()) {
+    if (!sherlockMatches(game, searchQuery)) continue;
+    all.push({
+      gameName: SHERLOCK_TAB,
+      gameLabel: SHERLOCK_LABEL,
       code: game.code,
       players: game.players.map((p) => ({ nickname: p.nickname, owner: p.owner, connected: p.connected })),
       started: game.status !== "waiting",
@@ -237,4 +287,8 @@ startAirForceLobby(refereedChanged);
 startJudgeDreddLobby(refereedChanged);
 startMonsterDerbyLobby(refereedChanged);
 startSuperSlapshotLobby(refereedChanged);
+startWaterlooLobby(refereedChanged);
+startWarOfTheRingLobby(refereedChanged);
+startAlamoLobby(refereedChanged);
+startSherlockLobby(refereedChanged);
 startZargosLobby(refereedChanged);
