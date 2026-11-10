@@ -2,10 +2,10 @@
 // in the warofthering module of the Hautefort service, published next to the lobby
 // under hautefort/warofthering/ (same origin: the Raffaillac nginx forwards it).
 // This tab lists them, creates and joins them through the API of the module, and
-// opens its game page (serviceModal.ts). The owner picks a scenario (Sauron for now;
-// later Gondor, War of the Ring Characters and the campaigns for 2 and 3 players),
-// a side (Sauron or the Alliance) and, as an option, Sauron reinforcements one turn
-// earlier; the game starts when the second player takes the free side.
+// opens its game page (serviceModal.ts). The owner picks a scenario (Sauron, Gondor, the
+// Character Game; later the campaigns for 2 and 3 players), a side among those of the
+// scenario (the Character Game: Fellowship, Eye or at random) and the option of the
+// scenario if it has one; the game starts when the second player takes the free side.
 
 import {
   type Field,
@@ -61,7 +61,7 @@ export interface WarOfTheRingGame {
 
 interface Catalog {
   sides: { key: string; name: string }[];
-  scenarios: { key: string; name: string; options: { key: string; name: string }[] }[];
+  scenarios: { key: string; name: string; options: { key: string; name: string }[]; sides?: { key: string; name: string }[] }[];
 }
 
 let games: WarOfTheRingGame[] = [];
@@ -139,16 +139,36 @@ function openCreateModal(): void {
     return;
   }
   let watchers: HTMLInputElement | null = null;
+  const scenarioField = selectField("scenario", "Scénario", c.scenarios.map((x) => ({ value: x.key, label: x.name })));
+  const sideField = selectField("side", "Camp", []);
+  // the option of each scenario (Sauron: reinforcements one turn earlier; Gondor: Legolas and Gimli)
+  const optionField = selectField("option", "Option", []);
+  // the sides and the options follow the scenario (Character Game: Fellowship, Eye or at random, q2)
+  const fill = (select: HTMLSelectElement, options: { value: string; label: string }[]): void => {
+    select.replaceChildren(...options.map((o) => {
+      const option = document.createElement("option");
+      option.value = o.value;
+      option.textContent = o.label;
+      return option;
+    }));
+  };
+  const follow = (): void => {
+    const scenario = c.scenarios.find((x) => x.key === (scenarioField.input as HTMLSelectElement).value) ?? c.scenarios[0];
+    fill(sideField.input as HTMLSelectElement, (scenario.sides ?? c.sides).map((x) => ({ value: x.key, label: x.name })));
+    fill(optionField.input as HTMLSelectElement, [{ value: "", label: "Aucune (comme au livret)" },
+      ...scenario.options.map((o) => ({ value: `${scenario.key}:${o.key}`, label: o.name }))]);
+    (optionField.input as HTMLSelectElement).disabled = scenario.options.length === 0;
+  };
+  scenarioField.input.addEventListener("change", follow);
+  follow();
   openModal(
     "Créer une partie — War of the Ring",
     [
       textField("nickname", "Nickname (obligatoire)", "Votre pseudo"),
       textField("key", "Clé d'utilisateur (Optionnel)", "Clé de vérification"),
-      selectField("scenario", "Scénario", c.scenarios.map((x) => ({ value: x.key, label: x.name }))),
-      selectField("side", "Camp", c.sides.map((s) => ({ value: s.key, label: s.name }))),
-      // the option of each scenario (Sauron: reinforcements one turn earlier; Gondor: Legolas and Gimli)
-      selectField("option", "Option", [{ value: "", label: "Aucune (comme au livret)" },
-        ...c.scenarios.flatMap((x) => x.options.map((o) => ({ value: `${x.key}:${o.key}`, label: `${x.name} : ${o.name}` })))]),
+      scenarioField,
+      sideField,
+      optionField,
       textField("access_key", "Clé d'accès au jeu (optionnel)", "Clé d'accès au jeu"),
     ],
     "Créer",
